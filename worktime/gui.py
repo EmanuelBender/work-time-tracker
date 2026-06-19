@@ -17,12 +17,12 @@ import time
 import urllib.parse
 
 from PySide6.QtCore import QRectF, Qt, QTimer
-from PySide6.QtGui import QAction, QColor, QCursor, QFont, QIcon, QPainter, QPixmap
+from PySide6.QtGui import QColor, QCursor, QPainter
 from PySide6.QtWidgets import (
     QApplication, QButtonGroup, QComboBox, QDialog, QDialogButtonBox, QDoubleSpinBox,
     QFileDialog, QFormLayout, QFrame, QHBoxLayout, QHeaderView, QInputDialog, QLabel,
     QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMenu, QMessageBox,
-    QPushButton, QStackedWidget, QSystemTrayIcon, QTableWidget, QTableWidgetItem,
+    QPushButton, QStackedWidget, QTableWidget, QTableWidgetItem,
     QToolTip, QVBoxLayout, QWidget,
 )
 
@@ -30,6 +30,7 @@ from . import config, db
 from .detector import accessibility_ok
 from .log import get_logger
 from .instance import InstanceGuard, stop_tracker
+from .statusbar import StatusBar
 from .tracker import Tracker
 
 log = get_logger("gui")
@@ -161,32 +162,29 @@ def dot(color, size=10):
     return d
 
 
-def _icon_pixmap(text=""):
-    # Height must match the macOS menu-bar icon target (~18pt) so the system
-    # doesn't downscale a wide pixmap and shrink the text. Rendered at 2x.
-    dpr, h = 2, 19
-    w = 17 + (8 * len(text) if text else 1)
-    pm = QPixmap(int(w * dpr), int(h * dpr))
-    pm.setDevicePixelRatio(dpr)
-    pm.fill(Qt.transparent)
-    p = QPainter(pm)
-    p.setRenderHint(QPainter.Antialiasing)
-    p.scale(dpr, dpr)                    # draw in logical coordinates
-    pen = p.pen(); pen.setColor(QColor("#000")); pen.setWidthF(1.3); p.setPen(pen)
-    p.drawEllipse(2, 4, 12, 12)
-    p.drawLine(8, 10, 8, 6)
-    p.drawLine(8, 10, 11, 11)
-    if text:
-        f = QFont(); f.setPixelSize(13); f.setWeight(QFont.Medium); p.setFont(f)
-        p.drawText(17, 14, text)
-    p.end()
-    return pm
+def _short(text, n=22):
+    return text if len(text) <= n else text[: n - 1] + "…"
 
 
-def menu_icon(text=""):
-    icon = QIcon(_icon_pixmap(text))
-    icon.setIsMask(True)
-    return icon
+def today_summary():
+    """(total_secs, billable, [(name, secs, colour)] biggest-first) for today —
+    feeds the menu-bar title and dropdown."""
+    start, end = period_bounds("Today")
+    by_id = {p["id"]: p for p in db.list_projects()}
+    secs, billable = {}, 0.0
+    for s in db.sessions_between(start, end):
+        pid = s["project_id"]
+        d = s["end_ts"] - s["start_ts"]
+        secs[pid] = secs.get(pid, 0) + d
+        p = by_id.get(pid)
+        if p and p["hourly_rate"]:
+            billable += d / 3600.0 * p["hourly_rate"]
+    rows = []
+    for pid, d in sorted(secs.items(), key=lambda x: -x[1]):
+        p = by_id.get(pid)
+        rows.append((p["name"] if p else "Unassigned", d,
+                     project_color(p) if p else "#888780"))
+    return sum(secs.values()), billable, rows
 
 
 def metric_card(label):
@@ -869,29 +867,21 @@ def main():
 
         window = MainWindow(tracker)
 
-        tray = QSystemTrayIcon(menu_icon())
-        menu = QMenu()
-        act_now = QAction("…"); act_now.setEnabled(False)
-        act_today = QAction("Today: 0:00"); act_today.setEnabled(False)
-        act_open = QAction("Open WorktimeTracker")
-        act_open.triggered.connect(lambda: (window.show(), window.raise_(), window.activateWindow()))
-        act_quit = QAction("Quit"); act_quit.triggered.connect(app.quit)
-        menu.addAction(act_now); menu.addAction(act_today); menu.addSeparator()
-        menu.addAction(act_open); menu.addSeparator(); menu.addAction(act_quit)
-        tray.setContextMenu(menu)
-        tray.activated.connect(
-            lambda reason: (window.show(), window.raise_(), window.activateWindow())
-            if reason == QSystemTrayIcon.Trigger else None)
-        tray.show()
+        def show_window():
+            window.show(); window.raise_(); window.activateWindow()
+
+        statusbar = StatusBar(on_open=show_window, on_quit=app.quit)
 
         def tick():
-            start, end = period_bounds("Today")
-            secs = sum(s["end_ts"] - s["start_ts"] for s in db.sessions_between(start, end))
-            tray.setIcon(menu_icon(fmt_hm(secs) if secs else ""))
-            proj = tracker.current_project
-            act_now.setText(f"▶ {tracker.current_app} → {proj}" if proj else "○ Idle")
-            act_today.setText(f"Today: {fmt_hm(secs)}")
-            tray.setToolTip(f"{proj or 'Idle'} — today {fmt_hm(secs)}")
+            total, billable, rows = today_summary()
+            proj, app_name = tracker.current_project, tracker.current_app
+            active = bool(proj and proj != "Unassigned")
+            title = f"{fmt_hm(total)} · {_short(proj)}" if active else fmt_hm(total)
+            now_text = f"{app_name} → {proj}" if proj else None
+            now_color = next((c for n, _d, c in rows if n == proj), None) if proj else None
+            proj_rows = [(name, fmt_hm(d), color) for name, d, color in rows]
+            total_text = f"Total   {fmt_hm(total)}   ·   €{billable:.0f}"
+            statusbar.update(title, now_text, now_color, proj_rows, total_text)
             if window.isVisible():
                 window.refresh_live()
 
