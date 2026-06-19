@@ -214,6 +214,9 @@ Replaces the spike's CLI + rumps. Built on the (unchanged) detection engine.
 > Code-health pass: ✅ SQLite WAL, ✅ rotating file log
 > (`~/Library/Application Support/WorktimeTracker/worktime.log`), ✅ pytest suite
 > (`tests/`, 10 engine tests), ✅ dead code removed.
+> ✅ **Control Center lifecycle** — local-only reviewed launch/quit, exact PID
+> observation, duplicate-instance protection, and graceful session flush. Stats
+> remain in WorktimeTracker's own menu rather than being duplicated elsewhere.
 > ✅ **Day-timeline** strip in Review — today's sessions as colour-coded blocks on
 > an hour axis, live 'now' marker, hover for details (`TimelineWidget`, custom
 > QPainter). Next visual idea (parked): weekly summary for invoicing.

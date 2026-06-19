@@ -11,6 +11,7 @@ The detection engine (detector / tracker / attribution / db) is unchanged.
 
 import csv
 import datetime
+import signal
 import threading
 import time
 import urllib.parse
@@ -25,9 +26,10 @@ from PySide6.QtWidgets import (
     QToolTip, QVBoxLayout, QWidget,
 )
 
-from . import db
+from . import config, db
 from .detector import accessibility_ok
 from .log import get_logger
+from .instance import InstanceGuard, stop_tracker
 from .tracker import Tracker
 
 log = get_logger("gui")
@@ -37,7 +39,7 @@ PALETTE = ["#8B7FE8", "#2FB89B", "#E8825A", "#5A9CF8", "#E06A98", "#E0A23B", "#8
 
 QSS = """
 QMainWindow, QDialog { background: #16181c; }
-QWidget { color: #e8eaed; font-family: "SF Pro Text", "Helvetica Neue"; font-size: 13px; }
+QWidget { color: #e8eaed; font-size: 13px; }
 
 QLabel#muted { color: #969ba4; }
 QLabel#h { color: #7e848f; font-size: 11px; }
@@ -829,53 +831,81 @@ class MainWindow(QMainWindow):
 
 
 def main():
-    db.init_db()
-    log.info("app starting; accessibility granted=%s", accessibility_ok())
     app = QApplication.instance() or QApplication([])
-    app.setStyleSheet(QSS)
-    app.setQuitOnLastWindowClosed(False)
+    signal_timer = QTimer()
+    signal_timer.timeout.connect(lambda: None)
+    signal_timer.start(200)
+    signal.signal(signal.SIGTERM, lambda _signal, _frame: QTimer.singleShot(0, app.quit))
 
-    tracker = Tracker()
-    threading.Thread(target=tracker.run, daemon=True).start()
-    app.aboutToQuit.connect(tracker.stop)
+    guard = InstanceGuard()
+    if not guard.acquire():
+        log.info("app already running; duplicate launch exiting")
+        return 0
 
-    window = MainWindow(tracker)
+    tracker = None
+    tracker_thread = None
+    shutdown_complete = False
 
-    tray = QSystemTrayIcon(menu_icon())
-    menu = QMenu()
-    act_now = QAction("…"); act_now.setEnabled(False)
-    act_today = QAction("Today: 0:00"); act_today.setEnabled(False)
-    act_open = QAction("Open WorktimeTracker")
-    act_open.triggered.connect(lambda: (window.show(), window.raise_(), window.activateWindow()))
-    act_quit = QAction("Quit"); act_quit.triggered.connect(app.quit)
-    menu.addAction(act_now); menu.addAction(act_today); menu.addSeparator()
-    menu.addAction(act_open); menu.addSeparator(); menu.addAction(act_quit)
-    tray.setContextMenu(menu)
-    tray.activated.connect(
-        lambda reason: (window.show(), window.raise_(), window.activateWindow())
-        if reason == QSystemTrayIcon.Trigger else None)
-    tray.show()
+    def shutdown():
+        nonlocal shutdown_complete
+        if shutdown_complete:
+            return
+        shutdown_complete = True
+        if tracker is not None and tracker_thread is not None:
+            if not stop_tracker(tracker, tracker_thread, config.SAMPLE_INTERVAL + 1):
+                log.warning("tracker thread did not stop before shutdown timeout")
+        guard.release()
 
-    def tick():
-        start, end = period_bounds("Today")
-        secs = sum(s["end_ts"] - s["start_ts"] for s in db.sessions_between(start, end))
-        tray.setIcon(menu_icon(fmt_hm(secs) if secs else ""))
-        proj = tracker.current_project
-        act_now.setText(f"▶ {tracker.current_app} → {proj}" if proj else "○ Idle")
-        act_today.setText(f"Today: {fmt_hm(secs)}")
-        tray.setToolTip(f"{proj or 'Idle'} — today {fmt_hm(secs)}")
-        if window.isVisible():
-            window.refresh_live()
+    try:
+        db.init_db()
+        log.info("app starting; accessibility granted=%s", accessibility_ok())
+        app.setStyleSheet(QSS)
+        app.setQuitOnLastWindowClosed(False)
 
-    timer = QTimer(); timer.timeout.connect(tick); timer.start(5000)
-    tick()
+        tracker = Tracker()
+        tracker_thread = threading.Thread(target=tracker.run, daemon=True)
+        tracker_thread.start()
+        app.aboutToQuit.connect(shutdown)
 
-    if not accessibility_ok():
-        QMessageBox.warning(window, "Accessibility needed",
-                            "Grant access in System Settings → Privacy & Security → "
-                            "Accessibility (to whatever launches this), then relaunch.")
-    window.show()
-    app.exec()
+        window = MainWindow(tracker)
+
+        tray = QSystemTrayIcon(menu_icon())
+        menu = QMenu()
+        act_now = QAction("…"); act_now.setEnabled(False)
+        act_today = QAction("Today: 0:00"); act_today.setEnabled(False)
+        act_open = QAction("Open WorktimeTracker")
+        act_open.triggered.connect(lambda: (window.show(), window.raise_(), window.activateWindow()))
+        act_quit = QAction("Quit"); act_quit.triggered.connect(app.quit)
+        menu.addAction(act_now); menu.addAction(act_today); menu.addSeparator()
+        menu.addAction(act_open); menu.addSeparator(); menu.addAction(act_quit)
+        tray.setContextMenu(menu)
+        tray.activated.connect(
+            lambda reason: (window.show(), window.raise_(), window.activateWindow())
+            if reason == QSystemTrayIcon.Trigger else None)
+        tray.show()
+
+        def tick():
+            start, end = period_bounds("Today")
+            secs = sum(s["end_ts"] - s["start_ts"] for s in db.sessions_between(start, end))
+            tray.setIcon(menu_icon(fmt_hm(secs) if secs else ""))
+            proj = tracker.current_project
+            act_now.setText(f"▶ {tracker.current_app} → {proj}" if proj else "○ Idle")
+            act_today.setText(f"Today: {fmt_hm(secs)}")
+            tray.setToolTip(f"{proj or 'Idle'} — today {fmt_hm(secs)}")
+            if window.isVisible():
+                window.refresh_live()
+
+        timer = QTimer(); timer.timeout.connect(tick); timer.start(5000)
+        tick()
+
+        if not accessibility_ok():
+            QMessageBox.warning(window, "Accessibility needed",
+                                "Grant access in System Settings → Privacy & Security → "
+                                "Accessibility (to whatever launches this), then relaunch.")
+        window.show()
+        return app.exec()
+    finally:
+        shutdown()
 
 
 if __name__ == "__main__":

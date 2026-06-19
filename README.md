@@ -55,6 +55,12 @@ Reports windows; register projects and assign time here instead of the CLI):
 ./.venv/bin/python -m worktime.gui
 ```
 
+The GUI is also available as a reviewed Start/Quit control in Manu Control
+Center. A single-instance lock prevents duplicate trackers. Control Center may
+quit only the process it launched; an exact externally launched instance is
+observed without being adopted or stopped. Accessibility permission remains a
+local prerequisite for activity detection.
+
 Data lives at `~/Library/Application Support/WorktimeTracker/worktime.db`
 (override with the `WORKTIME_DB` env var).
 

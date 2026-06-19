@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "projectID": "worktime-tracker",
+  "displayName": "WorktimeTracker",
+  "entries": [
+    {
+      "id": "app",
+      "displayName": "WorktimeTracker App",
+      "kind": "application",
+      "icon": "clock.arrow.circlepath",
+      "workingDirectory": ".",
+      "start": {
+        "executable": ".venv/bin/python",
+        "arguments": ["-m", "worktime.gui"]
+      },
+      "observation": {
+        "type": "pidFile",
+        "pidFile": ".runtime/worktime.pid",
+        "expectedExecutable": "/opt/homebrew/opt/python@3.13/Frameworks/Python.framework/Versions/Current/Resources/Python.app/Contents/MacOS/Python"
+      },
+      "stop": {
+        "strategy": "ownedProcess",
+        "graceSeconds": 8,
+        "allowExternal": false
+      },
+      "tags": ["time", "billing", "daily"]
+    }
+  ]
+}
