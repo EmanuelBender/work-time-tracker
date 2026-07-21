@@ -1,7 +1,7 @@
 import pytest
 
 from worktime import config, db
-from worktime.gui import REPORT_CSV_HEADER, report_csv_rows
+from worktime.reporting import REPORT_CSV_HEADER, report_csv_rows
 
 
 @pytest.fixture

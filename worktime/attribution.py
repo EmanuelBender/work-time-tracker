@@ -1,7 +1,8 @@
 """Resolve a detected activity to a billing project.
 
-Phase 0 implements chain steps 1, 2 and 5 (file match, learned rule, unassigned).
-Manual timer is handled in the tracker; session inference is Phase 4.
+The chain: file match (a document under a registered project folder), then a
+learned rule (app / url_domain / title_contains), else unassigned. Session
+inference — carrying the last strong project context — lives in the tracker.
 """
 
 import os
@@ -24,9 +25,10 @@ def _folder_match(file_path, folders):
     return best
 
 
-def _domain(url):
+def url_domain(url):
+    """Lowercase hostname of a URL, or '' — rule matching and UI display."""
     try:
-        return (urllib.parse.urlparse(url).hostname or "").lower()
+        return (urllib.parse.urlparse(url or "").hostname or "").lower()
     except Exception:
         return ""
 
@@ -34,7 +36,7 @@ def _domain(url):
 def _rule_match(activity, projects, rules):
     bundle = (activity.get("app_bundle") or "").lower()
     title = (activity.get("title") or "").lower()
-    domain = _domain(activity.get("url") or "")
+    domain = url_domain(activity.get("url"))
     by_id = {p["id"]: p for p in projects}
     for r in rules:
         kind, pat = r["kind"], (r["pattern"] or "").lower()

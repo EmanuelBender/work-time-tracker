@@ -26,34 +26,16 @@ System Settings → Privacy & Security → Accessibility.
 
 ## Use
 
-Register a project (folder = one project):
-
-```sh
-./.venv/bin/python -m worktime.cli add-project "Last Christmas" \
-    --folder "/Volumes/4TB HighSpeed/ENSO/Clients/Pandoras Play/Last Christmas/Last Christmas" \
-    --employer "Pandoras Play" --rate 80
-```
-
-Add a rule for non-file work (e.g. calls via Telephone → this project):
-
-```sh
-./.venv/bin/python -m worktime.cli add-rule --project 1 --kind app \
-    --pattern com.tlphn.Telephone
-```
-
-Track (headless), then review today's totals:
-
-```sh
-./.venv/bin/python -m worktime.cli run       # Ctrl-C to stop
-./.venv/bin/python -m worktime.cli today
-```
-
-Or — the normal way — launch the GUI (menu-bar item + Review / Projects /
-Reports windows; register projects and assign time here instead of the CLI):
+Launch the app (menu-bar item + Review / Projects / Reports / Rules windows —
+register projects and folders, assign time, and create rules here):
 
 ```sh
 ./.venv/bin/python -m worktime.gui
 ```
+
+Headless dev use: `python -m worktime.cli run` tracks in the terminal
+(Ctrl-C to stop); `python -m worktime.cli today` prints today's sessions and
+per-project totals.
 
 The GUI is also available as a reviewed Start/Quit control in Manu Control
 Center. A single-instance lock prevents duplicate trackers. Control Center may
@@ -71,7 +53,8 @@ Data lives at `~/Library/Application Support/WorktimeTracker/worktime.db`
 | `worktime/detector.py` | Live frontmost-app + document + idle detection |
 | `worktime/attribution.py` | Resolve an activity to a project (file match / rule) |
 | `worktime/tracker.py` | Sampling state machine → Session rows |
-| `worktime/db.py` | SQLite schema + storage |
-| `worktime/cli.py` | Headless CLI (setup, run, reports) |
-| `worktime/gui.py` | PySide6 GUI: menu-bar item + Review / Projects / Reports |
-| `detect_probe.py` | Standalone detection spike (diagnostics) |
+| `worktime/db.py` | SQLite schema, migrations + storage |
+| `worktime/timeutil.py` | Duration formatting + period bounds (shared) |
+| `worktime/reporting.py` | CSV report rows (headless) |
+| `worktime/cli.py` | Headless dev CLI (`run`, `today`) |
+| `worktime/gui.py` | PySide6 GUI: menu-bar item + Review / Projects / Reports / Rules |

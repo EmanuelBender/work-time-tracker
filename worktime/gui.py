@@ -14,7 +14,6 @@ import datetime
 import signal
 import threading
 import time
-import urllib.parse
 
 from PySide6.QtCore import QRectF, Qt, QTimer
 from PySide6.QtGui import QColor, QCursor, QPainter
@@ -27,15 +26,17 @@ from PySide6.QtWidgets import (
 )
 
 from . import config, db
+from .attribution import url_domain
 from .detector import accessibility_ok
 from .log import get_logger
 from .instance import InstanceGuard, stop_tracker
+from .reporting import report_csv_rows
 from .statusbar import StatusBar
+from .timeutil import PERIODS, fmt_hm, fmt_hms, period_bounds
 from .tracker import Tracker
 
 log = get_logger("gui")
 
-PERIODS = ["Today", "Last 7 days", "This month"]
 PALETTE = ["#8B7FE8", "#2FB89B", "#E8825A", "#5A9CF8", "#E06A98", "#E0A23B", "#8BBF4E"]
 
 QSS = """
@@ -119,42 +120,9 @@ QMenu::item:selected { background: rgba(95, 145, 240, 0.22); }
 """
 
 
-def fmt_hm(seconds):
-    s = int(seconds)
-    return f"{s // 3600}:{(s % 3600) // 60:02d}"
-
-
-def fmt_hms(seconds):
-    s = int(seconds)
-    return f"{s // 3600}:{(s % 3600) // 60:02d}:{s % 60:02d}"
-
-
 def project_color(project):
     pid = project.get("id", project.get("project_id", 0))
     return project.get("color") or PALETTE[(pid or 0) % len(PALETTE)]
-
-
-def url_domain(url):
-    if not url:
-        return ""
-    try:
-        return (urllib.parse.urlparse(url).hostname or "").lower()
-    except Exception:
-        return ""
-
-
-def period_bounds(period):
-    today = datetime.date.today()
-    if period == "Last 7 days":
-        start = today - datetime.timedelta(days=6)
-    elif period == "This month":
-        start = today.replace(day=1)
-    else:
-        start = today
-    s = datetime.datetime.combine(start, datetime.time.min).timestamp()
-    e = datetime.datetime.combine(
-        today + datetime.timedelta(days=1), datetime.time.min).timestamp()
-    return s, e
 
 
 def dot(color, size=10):
@@ -178,26 +146,6 @@ def today_summary():
         for r in summary["rows"]
     ]
     return summary["tracked_seconds"], summary["billable_amount"], rows
-
-
-REPORT_CSV_HEADER = [
-    "Project", "Employer", "Tracked Hours", "Billable Hours",
-    "Rate", "Amount", "Currency",
-]
-
-
-def report_csv_rows(rows):
-    yield REPORT_CSV_HEADER
-    for row in rows:
-        yield [
-            row["project_name"],
-            row["employer"],
-            f"{row['tracked_hours']:.2f}",
-            f"{row['billable_hours']:.2f}",
-            f"{row['rate']:g}" if row["rate"] else "",
-            f"{row['amount']:.2f}" if row["amount"] is not None else "",
-            row["currency"],
-        ]
 
 
 def metric_card(label):

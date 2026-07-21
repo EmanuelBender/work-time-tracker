@@ -85,9 +85,3 @@ def test_stop_tracker_waits_for_final_flush():
     assert stop_tracker(tracker, thread, timeout=6)
     assert tracker.stopped
     assert thread.timeout == 6
-
-
-def test_gui_shutdown_timeout_uses_tracker_configuration():
-    from worktime import gui
-
-    assert gui.config.SAMPLE_INTERVAL == 5

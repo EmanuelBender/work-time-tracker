@@ -10,4 +10,3 @@ __pycache__/
 *.log
 *.local.*
 .runtime/
-probe_log.txt

@@ -42,27 +42,11 @@ class Tracker:
     def __init__(self):
         self.detector = Detector()
         self._stop = threading.Event()
-        self._lock = threading.Lock()
         self._current = None      # open session, or None
-        self._manual = None       # {"project_id": ...} while a manual timer runs
         self.last_status = "starting…"
         self.current_app = None       # for the menu bar
         self.current_project = None
         self._context_project_id = None   # last strong project, for inference
-
-    # --- manual timer -------------------------------------------------------
-    def start_manual(self, project_id):
-        with self._lock:
-            self._manual = {"project_id": project_id}
-
-    def stop_manual(self):
-        with self._lock:
-            self._manual = None
-
-    @property
-    def manual_active(self):
-        with self._lock:
-            return self._manual is not None
 
     # --- loop ---------------------------------------------------------------
     def run(self):
@@ -107,19 +91,14 @@ class Tracker:
         projects = db.list_projects()
         rules = db.list_rules()
         folders = db.all_project_folders()
-        with self._lock:
-            manual = self._manual
-        if manual:
-            project_id, confidence = manual["project_id"], "manual"
-        else:
-            project_id, confidence, _ = attribution.resolve(activity, projects, rules, folders)
+        project_id, confidence, _ = attribution.resolve(activity, projects, rules, folders)
 
-        # Session inference: a confident attribution (open project file, a rule,
-        # or a manual timer) becomes the "current context". Activity that has no
-        # signal of its own (e.g. Soundly with no project file) is then attributed
-        # to that context — so it follows whatever project you're working in,
+        # Session inference: a confident attribution (open project file or a
+        # rule) becomes the "current context". Activity that has no signal of
+        # its own (e.g. Soundly with no project file) is then attributed to
+        # that context — so it follows whatever project you're working in,
         # rather than being locked to one. Tagged 'inferred' so it's reviewable.
-        if confidence in ("auto-file", "auto-rule", "manual"):
+        if confidence in ("auto-file", "auto-rule"):
             self._context_project_id = project_id
         elif project_id is None and self._context_project_id is not None:
             project_id, confidence = self._context_project_id, "inferred"
