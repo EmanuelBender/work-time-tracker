@@ -137,15 +137,15 @@ def _short(text, n=22):
 
 
 def today_summary():
-    """(total_secs, billable, [(name, secs, colour)] biggest-first) for today —
-    feeds the menu-bar title and dropdown."""
+    """(total_secs, billable_secs, [(name, secs, colour)] biggest-first) for
+    today — feeds the menu-bar title and dropdown."""
     start, end = period_bounds("Today")
     summary = db.totals_between(start, end)
     rows = [
         (r["project_name"], r["tracked_seconds"], project_color(r) if r["project_id"] else "#888780")
         for r in summary["rows"]
     ]
-    return summary["tracked_seconds"], summary["billable_amount"], rows
+    return summary["tracked_seconds"], summary["billable_seconds"], rows
 
 
 def metric_card(label):
@@ -455,8 +455,9 @@ class EditProjectDialog(QDialog):
         form = QFormLayout(self)
         self.name = QLineEdit(project["name"])
         self.employer = QLineEdit(project["employer"] or "")
-        self.rate = QDoubleSpinBox(maximum=10000, suffix=" /h")
-        self.rate.setValue(project["hourly_rate"] or 0)
+        self.fee = QDoubleSpinBox(maximum=1_000_000, suffix=" €")
+        self.fee.setToolTip("Fixed project price — the wage gauge divides it by billable hours")
+        self.fee.setValue(project["fee"] or 0)
         sw = QWidget(); sh = QHBoxLayout(sw); sh.setContentsMargins(0, 0, 0, 0); sh.setSpacing(6)
         self._swatches = []
         for c in PALETTE:
@@ -466,7 +467,7 @@ class EditProjectDialog(QDialog):
         sh.addStretch()
         form.addRow("Name", self.name)
         form.addRow("Employer", self.employer)
-        form.addRow("Rate", self.rate)
+        form.addRow("Fee", self.fee)
         form.addRow("Colour", sw)
         bb = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
         bb.accepted.connect(self.accept); bb.rejected.connect(self.reject)
@@ -484,7 +485,7 @@ class EditProjectDialog(QDialog):
     def values(self):
         return {"name": self.name.text().strip(),
                 "employer": self.employer.text().strip() or None,
-                "hourly_rate": self.rate.value() or None,
+                "fee": self.fee.value() or None,
                 "color": self._color}
 
 
@@ -496,16 +497,17 @@ class ProjectsView(QWidget):
         form = QHBoxLayout()
         self.name = QLineEdit(placeholderText="Project name"); self.name.setMinimumWidth(150)
         self.employer = QLineEdit(placeholderText="Employer"); self.employer.setMinimumWidth(130)
-        self.rate = QDoubleSpinBox(maximum=10000, suffix=" /h"); self.rate.setMinimumWidth(90)
+        self.fee = QDoubleSpinBox(maximum=1_000_000, suffix=" €"); self.fee.setMinimumWidth(100)
+        self.fee.setToolTip("Fixed project price — the wage gauge divides it by billable hours")
         self.folder = QLineEdit(placeholderText="First folder (optional)…"); self.folder.setReadOnly(True)
         pick = QPushButton("Choose…", clicked=self._pick)
         add = QPushButton("Add", clicked=self._add); add.setObjectName("accent")
-        form.addWidget(self.name); form.addWidget(self.employer); form.addWidget(self.rate)
+        form.addWidget(self.name); form.addWidget(self.employer); form.addWidget(self.fee)
         form.addWidget(self.folder, 1); form.addWidget(pick); form.addWidget(add)
         v.addLayout(form)
 
         self.table = QTableWidget(0, 4)
-        self.table.setHorizontalHeaderLabels(["Project", "Employer", "Rate", "Folders"])
+        self.table.setHorizontalHeaderLabels(["Project", "Employer", "Fee", "Folders"])
         self.table.verticalHeader().setVisible(False)
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
         v.addWidget(self.table)
@@ -538,8 +540,8 @@ class ProjectsView(QWidget):
             QMessageBox.warning(self, "Missing name", "Give the project a name.")
             return
         db.add_project(self.name.text().strip(), folder=self.folder.text().strip() or None,
-                       employer=self.employer.text().strip() or None, hourly_rate=self.rate.value() or None)
-        self.name.clear(); self.employer.clear(); self.folder.clear(); self.rate.setValue(0)
+                       employer=self.employer.text().strip() or None, fee=self.fee.value() or None)
+        self.name.clear(); self.employer.clear(); self.folder.clear(); self.fee.setValue(0)
         self.refresh()
 
     def _selected_project(self):
@@ -565,7 +567,7 @@ class ProjectsView(QWidget):
             if not v["name"]:
                 QMessageBox.warning(self, "Missing name", "Name can't be empty.")
                 return
-            db.update_project(pid, v["name"], v["employer"], v["hourly_rate"], v["color"])
+            db.update_project(pid, v["name"], v["employer"], v["fee"], v["color"])
             self.refresh()
 
     def _delete_project(self):
@@ -621,8 +623,8 @@ class ProjectsView(QWidget):
         self.table.setRowCount(len(projects))
         for r, p in enumerate(projects):
             n = len(db.list_project_folders(p["id"]))
-            rate = f"{p['hourly_rate']:g} {p['currency']}" if p["hourly_rate"] else "—"
-            for c, val in enumerate([p["name"], p["employer"] or "—", rate,
+            fee = f"{p['fee']:g} €" if p["fee"] else "—"
+            for c, val in enumerate([p["name"], p["employer"] or "—", fee,
                                      f"{n} folder{'s' if n != 1 else ''}"]):
                 item = QTableWidgetItem(str(val)); item.setFlags(item.flags() & ~Qt.ItemIsEditable)
                 self.table.setItem(r, c, item)
@@ -641,38 +643,39 @@ class ReportsView(QWidget):
         v.addLayout(bar)
         self.table = QTableWidget(0, 6)
         self.table.setHorizontalHeaderLabels(
-            ["Project", "Employer", "Tracked", "Billable", "Rate", "Amount"]
+            ["Project", "Employer", "Tracked", "Billable", "Fee", "€/h"]
         )
+        self.table.horizontalHeaderItem(5).setToolTip(
+            "Effective wage: fee ÷ all billable hours the project ever took")
         self.table.verticalHeader().setVisible(False)
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
         v.addWidget(self.table)
         self.total = QLabel(); self.total.setObjectName("big")
         v.addWidget(self.total, alignment=Qt.AlignRight)
 
-    def _rows(self):
+    def _summary(self):
         start, end = period_bounds(self.period.currentText())
-        return db.totals_between(start, end)["rows"]
+        return db.totals_between(start, end)
 
     def refresh(self, *_):
-        rows = self._rows()
+        summary = self._summary()
+        rows = summary["rows"]
         self.table.setRowCount(len(rows))
-        grand = 0.0
         for r, row in enumerate(rows):
-            amount = row["amount"]
             cells = [
                 row["project_name"],
                 row["employer"],
                 f"{row['tracked_hours']:.2f}",
                 f"{row['billable_hours']:.2f}",
-                f"{row['rate']:g}" if row["rate"] else "—",
-                f"{amount:.2f} {row['currency']}" if amount is not None else "—",
+                f"{row['fee']:g} €" if row["fee"] else "—",
+                f"{row['eff_rate']:.0f}" if row["eff_rate"] else "—",
             ]
             for c, val in enumerate(cells):
                 item = QTableWidgetItem(val); item.setFlags(item.flags() & ~Qt.ItemIsEditable)
                 self.table.setItem(r, c, item)
-            if amount:
-                grand += amount
-        self.total.setText(f"Total billable: {grand:.2f}")
+        self.total.setText(
+            f"Tracked {summary['tracked_seconds'] / 3600:.1f} h · "
+            f"billable {summary['billable_seconds'] / 3600:.1f} h")
 
     def _export(self):
         path, _ = QFileDialog.getSaveFileName(self, "Export CSV", "worktime.csv", "CSV (*.csv)")
@@ -680,7 +683,7 @@ class ReportsView(QWidget):
             return
         with open(path, "w", newline="") as f:
             w = csv.writer(f)
-            w.writerows(report_csv_rows(self._rows()))
+            w.writerows(report_csv_rows(self._summary()["rows"]))
         QMessageBox.information(self, "Exported", f"Saved to {path}")
 
 
@@ -771,7 +774,7 @@ class MainWindow(QMainWindow):
         start, end = period_bounds("Today")
         summary = db.totals_between(start, end)
         self.today_val.setText(fmt_hm(summary["tracked_seconds"]))
-        self.bill_val.setText(f"€{summary['billable_amount']:.0f}")
+        self.bill_val.setText(fmt_hm(summary["billable_seconds"]))
         if self.tracker.current_project:
             self.now.setText(f"●  Now:  {self.tracker.current_app}  →  {self.tracker.current_project}")
         else:
@@ -847,7 +850,7 @@ def main():
             now_text = f"{app_name} → {proj}" if proj else None
             now_color = next((c for n, _d, c in rows if n == proj), None) if proj else None
             proj_rows = [(name, fmt_hm(d), color) for name, d, color in rows]
-            total_text = f"Total   {fmt_hm(total)}   ·   €{billable:.0f}"
+            total_text = f"Total   {fmt_hm(total)}   ·   billable {fmt_hm(billable)}"
             statusbar.update(title, now_text, now_color, proj_rows, total_text)
             if window.isVisible():
                 window.refresh_live()

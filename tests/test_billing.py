@@ -1,3 +1,6 @@
+"""Fee-model billing: a project pays a fixed fee; the tracker answers whether
+the effective wage (fee / billable hours) is still healthy."""
+
 import pytest
 
 from worktime import config, db
@@ -26,28 +29,23 @@ def _session(project_id, start, end, confidence="auto-file", billable=None):
 
 
 def test_inferred_time_is_not_billable_until_confirmed(store):
-    project = store.add_project("P", employer="Client", hourly_rate=60, currency="EUR")
+    project = store.add_project("P", employer="Client", fee=240)
     store.insert_session(_session(project, 0, 3600, "auto-file"))
     guessed = store.insert_session(_session(project, 3600, 7200, "inferred"))
 
-    summary = store.totals_between(0, 7200)
-    row = summary["by_project_id"][project]
-
+    row = store.totals_between(0, 7200)["by_project_id"][project]
     assert row["tracked_seconds"] == 7200
     assert row["billable_seconds"] == 3600
-    assert row["amount"] == 60
-    assert summary["billable_amount"] == 60
+    assert row["eff_rate"] == 240              # 240 € over 1 confirmed hour
 
     store.set_session_project(guessed, project)
-    summary = store.totals_between(0, 7200)
-    row = summary["by_project_id"][project]
-
+    row = store.totals_between(0, 7200)["by_project_id"][project]
     assert row["billable_seconds"] == 7200
-    assert row["amount"] == 120
+    assert row["eff_rate"] == 120              # fee is fixed; more hours = lower wage
 
 
 def test_non_billable_session_stays_tracked(store):
-    project = store.add_project("P", hourly_rate=90)
+    project = store.add_project("P", fee=500)
     session_id = store.insert_session(_session(project, 0, 3600, "auto-rule"))
 
     store.set_session_billable(session_id, False)
@@ -56,38 +54,36 @@ def test_non_billable_session_stays_tracked(store):
 
     assert row["tracked_seconds"] == 3600
     assert row["billable_seconds"] == 0
-    assert row["amount"] == 0
+    assert row["eff_rate"] is None
     assert summary["tracked_seconds"] == 3600
-    assert summary["billable_amount"] == 0
+    assert summary["billable_seconds"] == 0
 
 
-def test_amount_uses_project_rate_and_currency(store):
-    project = store.add_project("P", hourly_rate=80, currency="EUR")
-    store.insert_session(_session(project, 0, 1800, "manual"))
+def test_effective_rate_uses_lifetime_hours_not_the_period(store):
+    project = store.add_project("P", fee=800)
+    day = 86400
+    store.insert_session(_session(project, 0, 4 * 3600))            # day 1: 4 h
+    store.insert_session(_session(project, day, day + 4 * 3600))    # day 2: 4 h
 
-    row = store.totals_between(0, 1800)["by_project_id"][project]
+    row = store.totals_between(day, 2 * day)["by_project_id"][project]
 
-    assert row["billable_hours"] == 0.5
-    assert row["amount"] == 40
-    assert row["currency"] == "EUR"
+    assert row["billable_hours"] == 4          # this period's slice
+    assert row["lifetime_billable_hours"] == 8
+    assert row["eff_rate"] == 100              # 800 € over all 8 h ever spent
 
 
-def test_rounding_applies_to_project_period_total_not_each_session(store):
-    project = store.add_project("P", hourly_rate=60)
-    for i in range(3):
-        store.insert_session(_session(project, i * 250, (i + 1) * 250, "auto-file"))
+def test_no_fee_or_no_billable_time_means_no_rate(store):
+    project = store.add_project("P")
+    store.insert_session(_session(project, 0, 3600))
+    assert store.totals_between(0, 3600)["by_project_id"][project]["eff_rate"] is None
 
-    raw = store.totals_between(0, 750)["by_project_id"][project]
-    rounded = store.totals_between(0, 750, rounding_minutes=15)["by_project_id"][project]
-
-    assert raw["billable_seconds"] == 750
-    assert raw["amount"] == 12.5
-    assert rounded["billable_seconds"] == 900
-    assert rounded["amount"] == 15
+    fee_only = store.add_project("Q", fee=100)
+    store.insert_session(_session(fee_only, 0, 3600, "inferred"))
+    assert store.totals_between(0, 3600)["by_project_id"][fee_only]["eff_rate"] is None
 
 
 def test_report_csv_rows_match_shared_aggregation(store):
-    project = store.add_project("P", employer="Client", hourly_rate=80, currency="EUR")
+    project = store.add_project("P", employer="Client", fee=80)
     store.insert_session(_session(project, 0, 3600, "auto-file"))
     store.insert_session(_session(project, 3600, 5400, "inferred"))
 
@@ -95,5 +91,5 @@ def test_report_csv_rows_match_shared_aggregation(store):
 
     assert list(report_csv_rows(rows)) == [
         REPORT_CSV_HEADER,
-        ["P", "Client", "1.50", "1.00", "80", "80.00", "EUR"],
+        ["P", "Client", "1.50", "1.00", "80", "80.00"],
     ]

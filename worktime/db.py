@@ -1,22 +1,27 @@
-"""SQLite storage: projects, sessions, rules."""
+"""SQLite storage: projects, sessions, rules — with versioned migrations.
 
-import math
+Billing model: a project is paid a fixed fee (EUR), not by the hour. Tracked
+time exists to answer one question — is the fee still a healthy effective
+hourly wage (fee / billable hours), or is the project eating too much time?
+"""
+
 import os
 import sqlite3
 import time
+from contextlib import contextmanager
 
 from . import config
 
 BILLABLE_CONFIDENCES = {"auto-file", "auto-rule", "manual"}
 
+SCHEMA_VERSION = 1
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS projects (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     name        TEXT NOT NULL,
-    folder      TEXT,                       -- absolute path; NULL = rule-only project
     employer    TEXT,
-    hourly_rate REAL,
-    currency    TEXT DEFAULT 'EUR',
+    fee         REAL,                       -- fixed project price (EUR)
     color       TEXT,
     created_ts  REAL NOT NULL
 );
@@ -32,14 +37,13 @@ CREATE TABLE IF NOT EXISTS sessions (
     start_ts    REAL NOT NULL,
     end_ts      REAL NOT NULL,
     confidence  TEXT NOT NULL,              -- auto-file | auto-rule | manual | inferred | unassigned
-    billable    INTEGER NOT NULL DEFAULT 1,
-    note        TEXT
+    billable    INTEGER NOT NULL DEFAULT 1
 );
 
 CREATE TABLE IF NOT EXISTS rules (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     project_id  INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-    kind        TEXT NOT NULL,              -- app | url_domain | title_contains | phone | contact
+    kind        TEXT NOT NULL,              -- app | url_domain | title_contains
     pattern     TEXT NOT NULL,
     created_ts  REAL NOT NULL
 );
@@ -54,28 +58,80 @@ CREATE INDEX IF NOT EXISTS idx_sessions_start ON sessions(start_ts);
 """
 
 
-def connect():
-    config.support_dir()
+@contextmanager
+def _conn():
     conn = sqlite3.connect(config.DB_PATH)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
-    return conn
+    try:
+        with conn:                # commit on success, rollback on error
+            yield conn
+    finally:
+        conn.close()
+
+
+# --- schema lifecycle -------------------------------------------------------
+def _migrate_v1(conn):
+    """Project-fee model + legacy cleanup.
+
+    Folds the write-never projects.folder column into project_folders, replaces
+    hourly_rate/currency with a fixed EUR fee (rates were wages-in, fees are a
+    different quantity — values are not carried over), drops the never-used
+    sessions.note, collapses the phone/contact rule kinds into title_contains
+    (identical behaviour), and normalizes billable flags written before the
+    confidence-aware default existed.
+    """
+    conn.execute(
+        "INSERT INTO project_folders (project_id, path)"
+        " SELECT id, folder FROM projects WHERE folder IS NOT NULL")
+    conn.execute("ALTER TABLE projects DROP COLUMN folder")
+    conn.execute("ALTER TABLE projects ADD COLUMN fee REAL")
+    conn.execute("ALTER TABLE projects DROP COLUMN hourly_rate")
+    conn.execute("ALTER TABLE projects DROP COLUMN currency")
+    conn.execute("ALTER TABLE sessions DROP COLUMN note")
+    conn.execute(
+        "UPDATE rules SET kind = 'title_contains' WHERE kind IN ('phone', 'contact')")
+    conn.execute(
+        "UPDATE sessions SET billable = 0 WHERE billable = 1 AND (project_id IS NULL"
+        " OR confidence NOT IN ('auto-file', 'auto-rule', 'manual'))")
+
+
+MIGRATIONS = [_migrate_v1]      # index i migrates user_version i -> i+1
+
+
+def _backup(conn, version):
+    """One-time safety copy before a migration rewrites billing data."""
+    dest = sqlite3.connect(f"{config.DB_PATH}.v{version}.bak")
+    try:
+        conn.backup(dest)
+    finally:
+        dest.close()
 
 
 def init_db():
-    with connect() as conn:
+    os.makedirs(os.path.dirname(config.DB_PATH), exist_ok=True)
+    with _conn() as conn:
         conn.execute("PRAGMA journal_mode = WAL")   # concurrent tracker-write / GUI-read
-        conn.executescript(SCHEMA)
+        version = conn.execute("PRAGMA user_version").fetchone()[0]
+        fresh = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'projects'"
+        ).fetchone() is None
+        if fresh:
+            conn.executescript(SCHEMA)
+        elif version < SCHEMA_VERSION:
+            _backup(conn, version)
+            for step in MIGRATIONS[version:SCHEMA_VERSION]:
+                step(conn)
+        conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
 
 # --- projects ---------------------------------------------------------------
-def add_project(name, folder=None, employer=None, hourly_rate=None,
-                currency="EUR", color=None):
-    with connect() as conn:
+def add_project(name, folder=None, employer=None, fee=None, color=None):
+    with _conn() as conn:
         cur = conn.execute(
-            "INSERT INTO projects (name, folder, employer, hourly_rate, currency, color, created_ts)"
-            " VALUES (?,?,?,?,?,?,?)",
-            (name, None, employer, hourly_rate, currency, color, time.time()),
+            "INSERT INTO projects (name, employer, fee, color, created_ts)"
+            " VALUES (?,?,?,?,?)",
+            (name, employer, fee, color, time.time()),
         )
         pid = cur.lastrowid
     if folder:
@@ -84,26 +140,27 @@ def add_project(name, folder=None, employer=None, hourly_rate=None,
 
 
 def list_projects():
-    with connect() as conn:
+    with _conn() as conn:
         return [dict(r) for r in conn.execute("SELECT * FROM projects ORDER BY name")]
 
 
-def update_project(project_id, name, employer, hourly_rate, color, currency=None):
-    with connect() as conn:
-        if currency is None:
-            conn.execute(
-                "UPDATE projects SET name=?, employer=?, hourly_rate=?, color=? WHERE id=?",
-                (name, employer, hourly_rate, color, project_id))
-        else:
-            conn.execute(
-                "UPDATE projects SET name=?, employer=?, hourly_rate=?, color=?, currency=? WHERE id=?",
-                (name, employer, hourly_rate, color, currency, project_id))
+def update_project(project_id, name, employer, fee, color):
+    with _conn() as conn:
+        conn.execute(
+            "UPDATE projects SET name=?, employer=?, fee=?, color=? WHERE id=?",
+            (name, employer, fee, color, project_id))
+
+
+def delete_project(project_id):
+    """Deletes the project; its sessions become Unassigned (FK SET NULL)."""
+    with _conn() as conn:
+        conn.execute("DELETE FROM projects WHERE id = ?", (project_id,))
 
 
 # --- project folders (a project can own several) ----------------------------
 def add_project_folder(project_id, path):
     path = os.path.abspath(os.path.expanduser(path))
-    with connect() as conn:
+    with _conn() as conn:
         cur = conn.execute(
             "INSERT INTO project_folders (project_id, path) VALUES (?, ?)",
             (project_id, path),
@@ -112,38 +169,27 @@ def add_project_folder(project_id, path):
 
 
 def list_project_folders(project_id):
-    """Folders for one project (includes any legacy projects.folder value)."""
-    with connect() as conn:
-        rows = [dict(r) for r in conn.execute(
+    with _conn() as conn:
+        return [dict(r) for r in conn.execute(
             "SELECT id, path FROM project_folders WHERE project_id = ? ORDER BY path",
             (project_id,))]
-        legacy = conn.execute(
-            "SELECT folder FROM projects WHERE id = ? AND folder IS NOT NULL",
-            (project_id,)).fetchone()
-        if legacy and legacy["folder"]:
-            rows.append({"id": None, "path": legacy["folder"]})
-    return rows
 
 
 def all_project_folders():
     """[{path, project_id}] across every project — used by attribution."""
-    with connect() as conn:
-        out = [dict(r) for r in conn.execute(
+    with _conn() as conn:
+        return [dict(r) for r in conn.execute(
             "SELECT path, project_id FROM project_folders")]
-        for r in conn.execute(
-                "SELECT folder AS path, id AS project_id FROM projects WHERE folder IS NOT NULL"):
-            out.append(dict(r))
-    return out
 
 
 def delete_project_folder(folder_id):
-    with connect() as conn:
+    with _conn() as conn:
         conn.execute("DELETE FROM project_folders WHERE id = ?", (folder_id,))
 
 
 # --- rules ------------------------------------------------------------------
 def add_rule(project_id, kind, pattern):
-    with connect() as conn:
+    with _conn() as conn:
         cur = conn.execute(
             "INSERT INTO rules (project_id, kind, pattern, created_ts) VALUES (?,?,?,?)",
             (project_id, kind, pattern.lower(), time.time()),
@@ -152,21 +198,15 @@ def add_rule(project_id, kind, pattern):
 
 
 def list_rules():
-    with connect() as conn:
+    with _conn() as conn:
         return [dict(r) for r in conn.execute(
             "SELECT r.*, p.name AS project_name FROM rules r"
             " LEFT JOIN projects p ON p.id = r.project_id ORDER BY r.id")]
 
 
 def delete_rule(rule_id):
-    with connect() as conn:
+    with _conn() as conn:
         conn.execute("DELETE FROM rules WHERE id = ?", (rule_id,))
-
-
-def delete_project(project_id):
-    """Deletes the project; its sessions become Unassigned (FK SET NULL)."""
-    with connect() as conn:
-        conn.execute("DELETE FROM projects WHERE id = ?", (project_id,))
 
 
 # --- sessions ---------------------------------------------------------------
@@ -182,28 +222,19 @@ def _default_billable(confidence, project_id):
     return int(project_id is not None and confidence in BILLABLE_CONFIDENCES)
 
 
-def _round_seconds(seconds, rounding_minutes):
-    if not rounding_minutes:
-        return seconds
-    step = int(rounding_minutes) * 60
-    if step <= 0:
-        return seconds
-    return math.floor(seconds / step + 0.5) * step
-
-
 def insert_session(s):
     confidence = s.get("confidence", "unassigned")
     project_id = s.get("project_id")
     billable = s.get("billable")
     if billable is None:
         billable = _default_billable(confidence, project_id)
-    with connect() as conn:
+    with _conn() as conn:
         cur = conn.execute(
             "INSERT INTO sessions (project_id, app_bundle, app_name, title, file_path, url,"
-            " start_ts, end_ts, confidence, billable, note) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            " start_ts, end_ts, confidence, billable) VALUES (?,?,?,?,?,?,?,?,?,?)",
             (project_id, s.get("app_bundle"), s.get("app_name"), s.get("title"),
              s.get("file_path"), s.get("url"), s["start_ts"], s["end_ts"],
-             confidence, int(bool(billable)), s.get("note")),
+             confidence, int(bool(billable))),
         )
         return cur.lastrowid
 
@@ -213,7 +244,7 @@ def set_session_project(session_id, project_id, confidence="manual"):
     if project_id is None:
         confidence = "unassigned"
     billable = _default_billable(confidence, project_id)
-    with connect() as conn:
+    with _conn() as conn:
         conn.execute(
             "UPDATE sessions SET project_id = ?, confidence = ?, billable = ? WHERE id = ?",
             (project_id, confidence, billable, session_id),
@@ -222,7 +253,7 @@ def set_session_project(session_id, project_id, confidence="manual"):
 
 def set_session_billable(session_id, billable):
     """Toggle invoice inclusion; checking a guessed row confirms its project."""
-    with connect() as conn:
+    with _conn() as conn:
         if billable:
             conn.execute(
                 "UPDATE sessions SET "
@@ -240,14 +271,14 @@ def set_session_billable(session_id, billable):
 
 def delete_session(session_id):
     """Remove a tracked entry entirely (cleanup of unrelated activity)."""
-    with connect() as conn:
+    with _conn() as conn:
         conn.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
 
 
 def assign_unassigned_by_app(app_bundle, project_id):
     """When a rule is created, sweep up earlier unassigned entries of that app.
     Returns how many were re-assigned."""
-    with connect() as conn:
+    with _conn() as conn:
         cur = conn.execute(
             "UPDATE sessions SET project_id = ?, confidence = 'auto-rule', billable = 1 "
             "WHERE project_id IS NULL AND app_bundle = ?",
@@ -257,7 +288,7 @@ def assign_unassigned_by_app(app_bundle, project_id):
 
 
 def sessions_between(start_ts, end_ts):
-    with connect() as conn:
+    with _conn() as conn:
         rows = conn.execute(
             "SELECT s.*, p.name AS project_name FROM sessions s"
             " LEFT JOIN projects p ON p.id = s.project_id"
@@ -267,35 +298,35 @@ def sessions_between(start_ts, end_ts):
         return [dict(r) for r in rows]
 
 
-def totals_between(start_ts, end_ts, rounding_minutes=0):
-    """Shared period totals for UI, menu bar, reports, and CSV export.
+def totals_between(start_ts, end_ts):
+    """Per-project period totals plus each project's lifetime effective rate.
 
-    Tracked time includes every session. Billable time only includes explicitly
-    billable sessions with invoice-safe confidence; guessed/unassigned time stays
-    visible but does not affect amounts until the user confirms it.
+    Tracked time counts every session; billable time only confirmed,
+    invoice-safe ones — guessed/unassigned time stays visible but never
+    changes the numbers until the user confirms it. eff_rate is
+    fee / *lifetime* billable hours (a fixed fee spreads over all the time a
+    project ever took, not just this period's slice).
     """
-    with connect() as conn:
-        projects = {
-            r["id"]: dict(r)
-            for r in conn.execute("SELECT * FROM projects")
-        }
-        rows = conn.execute(
-            "SELECT * FROM sessions WHERE start_ts >= ? AND start_ts < ? ORDER BY start_ts",
-            (start_ts, end_ts),
-        )
+    placeholders = ",".join("?" * len(BILLABLE_CONFIDENCES))
+    with _conn() as conn:
+        projects = {r["id"]: dict(r) for r in conn.execute("SELECT * FROM projects")}
+        lifetime = {r["project_id"]: r["secs"] for r in conn.execute(
+            "SELECT project_id, SUM(end_ts - start_ts) AS secs FROM sessions"
+            " WHERE billable = 1 AND project_id IS NOT NULL"
+            f"  AND confidence IN ({placeholders}) GROUP BY project_id",
+            tuple(BILLABLE_CONFIDENCES))}
         by_project = {}
-        for row in rows:
+        for row in conn.execute(
+                "SELECT * FROM sessions WHERE start_ts >= ? AND start_ts < ?",
+                (start_ts, end_ts)):
             s = dict(row)
             pid = s["project_id"]
             p = projects.get(pid)
             entry = by_project.setdefault(pid, {
                 "project_id": pid,
-                "id": pid,
                 "project_name": p["name"] if p else "Unassigned",
-                "name": p["name"] if p else "Unassigned",
                 "employer": (p["employer"] if p else "") or "",
-                "rate": p["hourly_rate"] if p and p["hourly_rate"] else None,
-                "currency": p["currency"] if p else "EUR",
+                "fee": p["fee"] if p and p["fee"] else None,
                 "color": p["color"] if p else None,
                 "tracked_seconds": 0.0,
                 "billable_seconds": 0.0,
@@ -305,18 +336,18 @@ def totals_between(start_ts, end_ts, rounding_minutes=0):
             if session_is_billable(s):
                 entry["billable_seconds"] += seconds
 
-    for entry in by_project.values():
-        entry["billable_seconds"] = _round_seconds(entry["billable_seconds"], rounding_minutes)
+    for pid, entry in by_project.items():
         entry["tracked_hours"] = entry["tracked_seconds"] / 3600.0
         entry["billable_hours"] = entry["billable_seconds"] / 3600.0
-        rate = entry["rate"]
-        entry["amount"] = round(entry["billable_hours"] * rate, 2) if rate else None
+        life_hours = lifetime.get(pid, 0.0) / 3600.0
+        entry["lifetime_billable_hours"] = life_hours
+        fee = entry["fee"]
+        entry["eff_rate"] = round(fee / life_hours, 2) if fee and life_hours else None
 
     rows = sorted(by_project.values(), key=lambda r: -r["tracked_seconds"])
     return {
         "tracked_seconds": sum(r["tracked_seconds"] for r in rows),
         "billable_seconds": sum(r["billable_seconds"] for r in rows),
-        "billable_amount": sum(r["amount"] or 0.0 for r in rows),
         "rows": rows,
         "by_project_id": {r["project_id"]: r for r in rows},
     }

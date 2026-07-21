@@ -2,7 +2,7 @@
 
 REPORT_CSV_HEADER = [
     "Project", "Employer", "Tracked Hours", "Billable Hours",
-    "Rate", "Amount", "Currency",
+    "Fee EUR", "Effective EUR/h",
 ]
 
 
@@ -15,7 +15,6 @@ def report_csv_rows(rows):
             row["employer"],
             f"{row['tracked_hours']:.2f}",
             f"{row['billable_hours']:.2f}",
-            f"{row['rate']:g}" if row["rate"] else "",
-            f"{row['amount']:.2f}" if row["amount"] is not None else "",
-            row["currency"],
+            f"{row['fee']:g}" if row["fee"] else "",
+            f"{row['eff_rate']:.2f}" if row["eff_rate"] else "",
         ]

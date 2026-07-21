@@ -163,11 +163,11 @@ def test_min_session_drops_short(store, monkeypatch):
 
 # --- db crud ---------------------------------------------------------------
 def test_project_update_and_folders(store):
-    p = store.add_project("P", folder="/a", hourly_rate=10)
+    p = store.add_project("P", folder="/a", fee=10)
     store.add_project_folder(p, "/b")
     assert len(store.list_project_folders(p)) == 2
     store.update_project(p, "P2", "Emp", 99, "#ffffff")
     got = store.list_projects()[0]
-    assert (got["name"], got["hourly_rate"], got["color"]) == ("P2", 99, "#ffffff")
+    assert (got["name"], got["fee"], got["color"]) == ("P2", 99, "#ffffff")
     store.delete_project(p)
     assert store.list_projects() == []
