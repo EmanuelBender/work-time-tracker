@@ -34,7 +34,9 @@ def _dot_image(hex_color, size=12):
 
 
 class _Target(AppKit.NSObject):
-    """Receives the menu actions and forwards to Python callables."""
+    """Receives the menu actions and forwards to Python callables. As the
+    menu's delegate it also tracks whether the dropdown is open, so updates
+    never rebuild the items under the user's cursor."""
 
     def initWithOpen_quit_(self, on_open, on_quit):
         self = objc.super(_Target, self).init()
@@ -42,7 +44,14 @@ class _Target(AppKit.NSObject):
             return None
         self._on_open = on_open
         self._on_quit = on_quit
+        self.menu_open = False
         return self
+
+    def menuWillOpen_(self, _menu):
+        self.menu_open = True
+
+    def menuDidClose_(self, _menu):
+        self.menu_open = False
 
     def openWindow_(self, _sender):
         try:
@@ -77,6 +86,7 @@ class StatusBar:
                 13, AppKit.NSFontWeightMedium))
             self._menu = AppKit.NSMenu.alloc().init()
             self._menu.setAutoenablesItems_(False)
+            self._menu.setDelegate_(self._target)
             self._item.setMenu_(self._menu)
             self._ok = True
         except Exception:
@@ -101,6 +111,8 @@ class StatusBar:
             return
         try:
             self._item.button().setTitle_(" " + title if title else "")
+            if self._target.menu_open:
+                return          # never swap items while the user is in the menu
             m = self._menu
             m.removeAllItems()
             m.addItem_(self._disabled(now_text or "Idle", now_color))

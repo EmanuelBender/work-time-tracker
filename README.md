@@ -1,18 +1,24 @@
 # WorktimeTracker
 
-A lean macOS menu-bar app that automatically tracks billable time per freelance
-project, by detecting which project folder's documents you're working in (plus
+A lean macOS menu-bar app that automatically tracks time per freelance project,
+by detecting which project folder's documents you're working in (plus
 rule-based attribution for email, calls, browser, and AI tools).
+
+Freelance work here is paid a **fixed fee per project**, so the money question
+the app answers is: *is this project still paying a healthy effective wage
+(fee ÷ hours it actually takes), or is it eating too much time?*
 
 See [PLAN.md](PLAN.md) for the full design and phased roadmap.
 
 ## Status
 
-**Phase 1.5 — GUI (current).** Detection engine, SQLite store, attribution, and
-the sampling state machine are built and validated against real apps (Logic Pro,
-Mail, Safari, Telephone, Claude/Codex). The UI is a **PySide6** app — a menu-bar
-item plus **Review / Projects / Reports** windows. Review-and-assign is the core:
-track everything, then assign unknowns with a click. `cli.py` is a dev tool only.
+Detection engine, SQLite store (versioned migrations), attribution, and the
+sampling state machine are built and validated against real apps (Logic Pro,
+Mail, Safari, Telephone, Claude/Codex). The UI is a **PySide6** app — a native
+menu-bar item plus **Review / Projects / Reports / Rules** views.
+Review-and-assign is the core: track everything, then assign unknowns with a
+click. Reports show each project's fee and live effective €/h. `cli.py` is a
+dev tool only.
 
 ## Setup
 
@@ -57,4 +63,5 @@ Data lives at `~/Library/Application Support/WorktimeTracker/worktime.db`
 | `worktime/timeutil.py` | Duration formatting + period bounds (shared) |
 | `worktime/reporting.py` | CSV report rows (headless) |
 | `worktime/cli.py` | Headless dev CLI (`run`, `today`) |
-| `worktime/gui.py` | PySide6 GUI: menu-bar item + Review / Projects / Reports / Rules |
+| `worktime/statusbar.py` | Native menu-bar item (NSStatusItem) |
+| `worktime/gui/` | PySide6 GUI package: theme, widgets, one module per view |

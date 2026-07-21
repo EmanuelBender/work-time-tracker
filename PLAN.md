@@ -1,15 +1,17 @@
 # WorktimeTracker — Build Plan
 
 A lean macOS menu-bar app that automatically tracks how much time you spend
-working on each freelance project, so you can bill employers accurately.
+working on each freelance project.
 
 > **Core model:** a *project* is a folder (one employer/project per folder).
 > *Work* is active time spent with that project's documents open — extended by
 > rules and manual input to also capture browser, email, AI-agent, call, and
 > messaging time that has no project file.
 
-**North star for v1:** trustworthy **billing & reports** — per-project /
-per-employer totals with hourly rates and CSV export for invoicing.
+**North star for v1:** a trustworthy **effective-wage gauge**. Projects are
+paid a fixed fee, not by the hour — the number that matters is
+fee ÷ billable hours: is this project still paying well, or is it eating too
+much time? Per-project totals + CSV export back it up.
 
 ---
 
@@ -21,8 +23,9 @@ per-employer totals with hourly rates and CSV export for invoicing.
 | Engine | **Python** (PyObjC + stdlib `sqlite3`) — **validated** | Detection proven on real apps; this is the core and it stays. |
 | GUI | **Python + PySide6 (Qt)** — one stack for the menu-bar item *and* the windows | Single event loop → no `rumps`/webview run-loop conflict (the main source of jank). Mature widgets + charts + native dialogs. Chosen over a Swift rewrite to avoid throwing away working code (user's call, 2026-06-18). Web UI (pywebview) is the fallback if a web look is preferred. |
 | Primary interaction | **Review-and-assign** (not upfront rule config) | Track everything → bucket the unknowns → assign with one click → assignment can become a rule. No rule ever has to be defined in advance. |
-| Storage | **SQLite**, local-only (`sqlite3` now, GRDB if we port) | Time entries are append-only; no cloud, data stays on your machine. |
-| Project = | A registered **folder** with employer + optional hourly rate | Matches existing organization; zero manual tagging for file work. |
+| Storage | **SQLite**, local-only (`sqlite3` now, GRDB if we port) — versioned via `PRAGMA user_version` migrations | Time entries are append-only; no cloud, data stays on your machine. |
+| Project = | A registered **folder** with employer + optional fixed **fee** (EUR) | Matches existing organization; zero manual tagging for file work. |
+| Billing model | **Fixed fee per project** (decided 2026-07-22) | Freelance payment here is per project, not per hour. The app derives the *effective wage* (fee ÷ lifetime billable hours) per project — the health signal shown in Reports. |
 
 > **Python caveat (personal use only):** macOS attaches the Accessibility
 > permission to whatever runs the script (the Terminal app or the Python
@@ -70,10 +73,12 @@ rows hit the database — lean and cheap.
 ### Defaults & tuning (all configurable later)
 - Sample interval: **5 s**
 - AFK / idle threshold: **2 min** (no input → stop counting)
-- Minimum session length: **30 s** (ignore quick app flicks)
-- Billing rounding: per project — off / nearest 5 min / nearest 15 min
+- Minimum session length: **15 s** (ignore quick app flicks)
+- Max tick gap: **30 s** — silent ticks (sleep, lid, stalls) end the open
+  session at the last live sample; gaps are never billed
 
-### Detection spike findings (validated 2026-06-18, via `detect_probe.py`)
+### Detection spike findings (validated 2026-06-18; the spike script is
+### retired — its logic lives on in `detector.py`)
 Real data from the user's machine. The mechanism is proven; these are the rules
 it taught us.
 
@@ -125,7 +130,7 @@ deepen accuracy and coverage. Check items off as we go.
       `Rule(id, projectId, kind, pattern)`  ← used from Phase 4 (app / url rules).
       `confidence ∈ {auto-file, auto-rule, manual, inferred, unassigned}`.
 - [x] Accessibility permission check + onboarding (`AXIsProcessTrusted`).
-- [x] Project registration via CLI (folder, employer, hourly rate, currency).
+- [x] Project registration (folder, employer, fee) — now GUI-only.
       ↳ TODO: "folder = employer, each subfolder = a project" auto-split + edit UI.
 
 ### Phase 1 — Core detection (thin slice)  ✅ mostly built (2026-06-18)
@@ -171,13 +176,17 @@ Replaces the spike's CLI + rumps. Built on the (unchanged) detection engine.
       (verified by rendering the window offscreen and inspecting).
 - [ ] Live look review on the user's Mac — does the dark UI feel right?
 
-### Phase 2 — Billing & reports  ⭐ (priority output)
-- [ ] Per-project and per-employer totals (day / week / month).
-- [ ] Hourly rate → billable amount per project/period.
-- [ ] Menu-bar glance: today's time per project; quick totals.
-- [ ] Reports view with date-range picker + grouping.
-- [ ] **CSV export** for invoicing (project, employer, date, hours, amount).
-- [ ] Rounding rules (e.g. nearest 5/15 min) configurable.
+### Phase 2 — Billing & reports  ⭐ (priority output) — reframed to the fee model
+- [x] Per-project totals (Today / 7 days / month) via one shared aggregation
+      (`db.totals_between`), feeding UI, menu bar, reports and CSV alike.
+- [x] Explicit **billable** flag per session (confidence-aware defaults; the
+      Review tab confirms guessed time with one click).
+- [x] Fixed **fee** per project → **effective €/h** (fee ÷ lifetime billable
+      hours) in Reports — the wage-health gauge.
+- [x] Menu-bar glance: today's time per project; quick totals.
+- [x] **CSV export** (project, employer, tracked/billable hours, fee, eff. €/h).
+- [ ] Reports view with date-range picker + per-employer grouping.
+- ~~Rounding rules~~ — obsolete under the fixed-fee model.
 
 ### Phase 3 — Timeline review & manual fallback
 - [ ] Timeline / day view of sessions; see what was tracked.
@@ -227,17 +236,23 @@ Replaces the spike's CLI + rumps. Built on the (unchanged) detection engine.
 > need the eventual Swift port. (Qt gotcha fixed: style `QHeaderView` widget, not
 > just `::section`, or it falls back to the light palette.)
 
+> Cleanup pass 2026-07-22 (lead-dev review, v0.2.0): ✅ gui split into a
+> package, ✅ tick-gap guard (sleep is never billed) + midnight session split +
+> DST-safe day bounds, ✅ `user_version` migrations (v1: legacy folder column
+> folded into `project_folders`, fee replaces hourly_rate/currency, dead
+> `note` column and phone/contact rule kinds removed, billable flags
+> normalized; pre-migration DB backup), ✅ dead code removed (manual-timer
+> plumbing, detect_probe spike, CLI trimmed to `run`/`today`), ✅ shared
+> helpers unified (timeutil / reporting / attribution.url_domain), ✅
+> status-bar menu no longer rebuilds while open.
+
 Remaining, prioritised:
-0. **Split `gui.py` (716 lines) into a `gui/` package** (widgets / review /
-   projects / reports / rules / window / app) — the one structural debt. Defer
-   until the testing phase settles, to avoid destabilising it mid-test.
 1. **Launch at login + real `.app` bundle** (LSUIElement to hide the dock icon,
    app icon) — only after robustness is proven.
-2. **Session editing** — adjust times, split, merge (billing accuracy).
-3. **Billing rounding** — per-project nearest 5/15 min (config exists, unused).
-4. **Idle-return prompt** — "you were away N min — keep / discard / assign?"
-5. Local DB backups + export/import.   6. Remember window size & last tab.
-7. Empty states + a tag legend.   8. `lsof` fallback when AXDocument is blank.
+2. **Session editing** — adjust times, split, merge (accuracy of the wage gauge).
+3. **Idle-return prompt** — "you were away N min — keep / discard / assign?"
+4. Local DB backups + export/import.   5. Remember window size & last tab.
+6. Empty states + a tag legend.   7. `lsof` fallback when AXDocument is blank.
 
 ## Edge cases & notes (don't forget)
 
@@ -251,7 +266,9 @@ Remaining, prioritised:
   longest-prefix wins.
 - **Privacy** — everything local; URL/title capture is sensitive, make it
   toggleable and excludable per app.
-- **Clock changes / sleep / wake** — handle gaps; don't bill through sleep.
+- ✅ **Clock changes / sleep / wake** — handled: ticks silent past
+  `MAX_TICK_GAP` end the open session at the last live sample; sessions split
+  at local midnight so daily totals stay exact.
 - **Multi-monitor / Spaces** — frontmost app is global, should be fine.
 
 ## Future ideas (parking lot)
