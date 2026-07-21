@@ -19,10 +19,10 @@ import urllib.parse
 from PySide6.QtCore import QRectF, Qt, QTimer
 from PySide6.QtGui import QColor, QCursor, QPainter
 from PySide6.QtWidgets import (
-    QApplication, QButtonGroup, QComboBox, QDialog, QDialogButtonBox, QDoubleSpinBox,
-    QFileDialog, QFormLayout, QFrame, QHBoxLayout, QHeaderView, QInputDialog, QLabel,
-    QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMenu, QMessageBox,
-    QPushButton, QStackedWidget, QTableWidget, QTableWidgetItem,
+    QApplication, QButtonGroup, QCheckBox, QComboBox, QDialog, QDialogButtonBox,
+    QDoubleSpinBox, QFileDialog, QFormLayout, QFrame, QHBoxLayout, QHeaderView,
+    QInputDialog, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow,
+    QMenu, QMessageBox, QPushButton, QStackedWidget, QTableWidget, QTableWidgetItem,
     QToolTip, QVBoxLayout, QWidget,
 )
 
@@ -130,7 +130,8 @@ def fmt_hms(seconds):
 
 
 def project_color(project):
-    return project.get("color") or PALETTE[(project["id"] or 0) % len(PALETTE)]
+    pid = project.get("id", project.get("project_id", 0))
+    return project.get("color") or PALETTE[(pid or 0) % len(PALETTE)]
 
 
 def url_domain(url):
@@ -170,21 +171,32 @@ def today_summary():
     """(total_secs, billable, [(name, secs, colour)] biggest-first) for today —
     feeds the menu-bar title and dropdown."""
     start, end = period_bounds("Today")
-    by_id = {p["id"]: p for p in db.list_projects()}
-    secs, billable = {}, 0.0
-    for s in db.sessions_between(start, end):
-        pid = s["project_id"]
-        d = s["end_ts"] - s["start_ts"]
-        secs[pid] = secs.get(pid, 0) + d
-        p = by_id.get(pid)
-        if p and p["hourly_rate"]:
-            billable += d / 3600.0 * p["hourly_rate"]
-    rows = []
-    for pid, d in sorted(secs.items(), key=lambda x: -x[1]):
-        p = by_id.get(pid)
-        rows.append((p["name"] if p else "Unassigned", d,
-                     project_color(p) if p else "#888780"))
-    return sum(secs.values()), billable, rows
+    summary = db.totals_between(start, end)
+    rows = [
+        (r["project_name"], r["tracked_seconds"], project_color(r) if r["project_id"] else "#888780")
+        for r in summary["rows"]
+    ]
+    return summary["tracked_seconds"], summary["billable_amount"], rows
+
+
+REPORT_CSV_HEADER = [
+    "Project", "Employer", "Tracked Hours", "Billable Hours",
+    "Rate", "Amount", "Currency",
+]
+
+
+def report_csv_rows(rows):
+    yield REPORT_CSV_HEADER
+    for row in rows:
+        yield [
+            row["project_name"],
+            row["employer"],
+            f"{row['tracked_hours']:.2f}",
+            f"{row['billable_hours']:.2f}",
+            f"{row['rate']:g}" if row["rate"] else "",
+            f"{row['amount']:.2f}" if row["amount"] is not None else "",
+            row["currency"],
+        ]
 
 
 def metric_card(label):
@@ -219,13 +231,15 @@ class ProjectRail(QFrame):
             if item.widget():
                 item.widget().setParent(None)   # remove immediately (no ghosts)
         start, end = period_bounds("Today")
-        secs = {}
-        for s in db.sessions_between(start, end):
-            secs[s["project_id"]] = secs.get(s["project_id"], 0) + (s["end_ts"] - s["start_ts"])
+        summary = db.totals_between(start, end)
         for p in db.list_projects():
-            self.rows.addWidget(self._row(project_color(p), p["name"], secs.get(p["id"], 0)))
-        if secs.get(None):
-            self.rows.addWidget(self._row("#888780", "Unassigned", secs[None], muted=True))
+            row = summary["by_project_id"].get(p["id"])
+            self.rows.addWidget(self._row(project_color(p), p["name"],
+                                          row["tracked_seconds"] if row else 0))
+        unassigned = summary["by_project_id"].get(None)
+        if unassigned:
+            self.rows.addWidget(self._row("#888780", "Unassigned",
+                                          unassigned["tracked_seconds"], muted=True))
 
     def _row(self, color, name, seconds, muted=False):
         w = QWidget(); h = QHBoxLayout(w); h.setContentsMargins(4, 5, 4, 5); h.setSpacing(8)
@@ -351,16 +365,19 @@ class ReviewView(QWidget):
         bar.addWidget(QPushButton("Refresh", clicked=self.refresh))
         rv.addLayout(bar)
 
-        self.table = QTableWidget(0, 6)
-        self.table.setHorizontalHeaderLabels(["When", "Duration", "Activity", "How", "Project", ""])
+        self.table = QTableWidget(0, 7)
+        self.table.setHorizontalHeaderLabels(
+            ["When", "Duration", "Activity", "How", "Project", "Bill", ""]
+        )
         self.table.verticalHeader().setVisible(False)
         self.table.verticalHeader().setDefaultSectionSize(40)   # room for the dropdown
         self.table.setSelectionMode(QTableWidget.NoSelection)
         hd = self.table.horizontalHeader()
         for col, mode in {0: QHeaderView.Fixed, 1: QHeaderView.Fixed, 2: QHeaderView.Stretch,
-                          3: QHeaderView.Fixed, 4: QHeaderView.Fixed, 5: QHeaderView.Fixed}.items():
+                          3: QHeaderView.Fixed, 4: QHeaderView.Fixed, 5: QHeaderView.Fixed,
+                          6: QHeaderView.Fixed}.items():
             hd.setSectionResizeMode(col, mode)
-        for col, wpx in {0: 96, 1: 80, 3: 64, 4: 200, 5: 120}.items():
+        for col, wpx in {0: 96, 1: 80, 3: 64, 4: 200, 5: 64, 6: 120}.items():
             self.table.setColumnWidth(col, wpx)
         rv.addWidget(self.table)
         h.addWidget(right, 1)
@@ -369,7 +386,7 @@ class ReviewView(QWidget):
         start, end = period_bounds("Today")
         sessions = db.sessions_between(start, end)
         pcolor = {p["id"]: project_color(p) for p in db.list_projects()}
-        total = sum(s["end_ts"] - s["start_ts"] for s in sessions)
+        total = db.totals_between(start, end)["tracked_seconds"]
         self.timeline.set_data(sessions, pcolor)
         self.timeline_head.setText(f"Today · {fmt_hm(total)} tracked")
 
@@ -412,6 +429,16 @@ class ReviewView(QWidget):
             ch.addWidget(combo)
             self.table.setCellWidget(r, 4, cell)
 
+            bill_cell = QWidget(); bh = QHBoxLayout(bill_cell)
+            bh.setContentsMargins(2, 2, 2, 2); bh.setAlignment(Qt.AlignCenter)
+            bill = QCheckBox()
+            bill.setToolTip("Include this entry in billable totals")
+            bill.setEnabled(s["project_id"] is not None)
+            bill.setChecked(db.session_is_billable(s))
+            bill.toggled.connect(lambda checked, sid=s["id"]: self._billable(sid, checked))
+            bh.addWidget(bill)
+            self.table.setCellWidget(r, 5, bill_cell)
+
             acts = QWidget(); ah = QHBoxLayout(acts); ah.setContentsMargins(2, 2, 2, 2); ah.setSpacing(4)
             rule_b = QPushButton("rule"); rule_b.setObjectName("mini")
             rule_b.setToolTip("Make a rule (app / site / title) → the assigned project")
@@ -420,10 +447,14 @@ class ReviewView(QWidget):
             del_b.setToolTip("Remove this entry (cleanup — does not make a rule)")
             del_b.clicked.connect(lambda _c=False, sid=s["id"]: self._delete(sid))
             ah.addWidget(rule_b); ah.addWidget(del_b)
-            self.table.setCellWidget(r, 5, acts)
+            self.table.setCellWidget(r, 6, acts)
 
     def _assign(self, session_id, combo):
         db.set_session_project(session_id, combo.currentData())
+        self.refresh()
+
+    def _billable(self, session_id, checked):
+        db.set_session_billable(session_id, checked)
         self.refresh()
 
     def _delete(self, session_id):
@@ -659,8 +690,10 @@ class ReportsView(QWidget):
         exp = QPushButton("Export CSV", clicked=self._export); exp.setObjectName("accent")
         bar.addWidget(exp)
         v.addLayout(bar)
-        self.table = QTableWidget(0, 5)
-        self.table.setHorizontalHeaderLabels(["Project", "Employer", "Hours", "Rate", "Amount"])
+        self.table = QTableWidget(0, 6)
+        self.table.setHorizontalHeaderLabels(
+            ["Project", "Employer", "Tracked", "Billable", "Rate", "Amount"]
+        )
         self.table.verticalHeader().setVisible(False)
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
         v.addWidget(self.table)
@@ -669,27 +702,22 @@ class ReportsView(QWidget):
 
     def _rows(self):
         start, end = period_bounds(self.period.currentText())
-        by_id = {p["id"]: p for p in db.list_projects()}
-        agg = {}
-        for s in db.sessions_between(start, end):
-            agg[s["project_id"]] = agg.get(s["project_id"], 0.0) + (s["end_ts"] - s["start_ts"])
-        out = []
-        for pid, secs in agg.items():
-            p = by_id.get(pid)
-            name = p["name"] if p else "Unassigned"
-            rate = p["hourly_rate"] if p and p["hourly_rate"] else None
-            hours = secs / 3600.0
-            amount = round(hours * rate, 2) if rate else None
-            out.append((name, (p["employer"] if p else "") or "", hours, rate, amount,
-                        p["currency"] if p else "EUR"))
-        out.sort(key=lambda x: -x[2])
-        return out
+        return db.totals_between(start, end)["rows"]
 
     def refresh(self, *_):
-        rows = self._rows(); self.table.setRowCount(len(rows)); grand = 0.0
-        for r, (name, employer, hours, rate, amount, cur) in enumerate(rows):
-            cells = [name, employer, f"{hours:.2f}", f"{rate:g}" if rate else "—",
-                     f"{amount:.2f} {cur}" if amount is not None else "—"]
+        rows = self._rows()
+        self.table.setRowCount(len(rows))
+        grand = 0.0
+        for r, row in enumerate(rows):
+            amount = row["amount"]
+            cells = [
+                row["project_name"],
+                row["employer"],
+                f"{row['tracked_hours']:.2f}",
+                f"{row['billable_hours']:.2f}",
+                f"{row['rate']:g}" if row["rate"] else "—",
+                f"{amount:.2f} {row['currency']}" if amount is not None else "—",
+            ]
             for c, val in enumerate(cells):
                 item = QTableWidgetItem(val); item.setFlags(item.flags() & ~Qt.ItemIsEditable)
                 self.table.setItem(r, c, item)
@@ -703,10 +731,7 @@ class ReportsView(QWidget):
             return
         with open(path, "w", newline="") as f:
             w = csv.writer(f)
-            w.writerow(["Project", "Employer", "Hours", "Rate", "Amount", "Currency"])
-            for name, employer, hours, rate, amount, cur in self._rows():
-                w.writerow([name, employer, f"{hours:.2f}", rate or "",
-                            amount if amount is not None else "", cur])
+            w.writerows(report_csv_rows(self._rows()))
         QMessageBox.information(self, "Exported", f"Saved to {path}")
 
 
@@ -795,16 +820,9 @@ class MainWindow(QMainWindow):
 
     def _update_status(self):
         start, end = period_bounds("Today")
-        rows = db.sessions_between(start, end)
-        by_id = {p["id"]: p for p in db.list_projects()}
-        total = sum(s["end_ts"] - s["start_ts"] for s in rows)
-        billable = 0.0
-        for s in rows:
-            p = by_id.get(s["project_id"])
-            if p and p["hourly_rate"]:
-                billable += (s["end_ts"] - s["start_ts"]) / 3600.0 * p["hourly_rate"]
-        self.today_val.setText(fmt_hm(total))
-        self.bill_val.setText(f"€{billable:.0f}")
+        summary = db.totals_between(start, end)
+        self.today_val.setText(fmt_hm(summary["tracked_seconds"]))
+        self.bill_val.setText(f"€{summary['billable_amount']:.0f}")
         if self.tracker.current_project:
             self.now.setText(f"●  Now:  {self.tracker.current_app}  →  {self.tracker.current_project}")
         else:

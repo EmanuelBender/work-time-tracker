@@ -141,5 +141,4 @@ class Tracker:
             "start_ts": c["start_ts"],
             "end_ts": c["last_ts"],
             "confidence": c["confidence"],
-            "billable": 1,
         })

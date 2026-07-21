@@ -1,10 +1,13 @@
 """SQLite storage: projects, sessions, rules."""
 
+import math
 import os
 import sqlite3
 import time
 
 from . import config
+
+BILLABLE_CONFIDENCES = {"auto-file", "auto-rule", "manual"}
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS projects (
@@ -167,25 +170,72 @@ def delete_project(project_id):
 
 
 # --- sessions ---------------------------------------------------------------
+def session_is_billable(session):
+    return (
+        bool(session.get("billable"))
+        and session.get("project_id") is not None
+        and session.get("confidence") in BILLABLE_CONFIDENCES
+    )
+
+
+def _default_billable(confidence, project_id):
+    return int(project_id is not None and confidence in BILLABLE_CONFIDENCES)
+
+
+def _round_seconds(seconds, rounding_minutes):
+    if not rounding_minutes:
+        return seconds
+    step = int(rounding_minutes) * 60
+    if step <= 0:
+        return seconds
+    return math.floor(seconds / step + 0.5) * step
+
+
 def insert_session(s):
+    confidence = s.get("confidence", "unassigned")
+    project_id = s.get("project_id")
+    billable = s.get("billable")
+    if billable is None:
+        billable = _default_billable(confidence, project_id)
     with connect() as conn:
         cur = conn.execute(
             "INSERT INTO sessions (project_id, app_bundle, app_name, title, file_path, url,"
             " start_ts, end_ts, confidence, billable, note) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-            (s.get("project_id"), s.get("app_bundle"), s.get("app_name"), s.get("title"),
+            (project_id, s.get("app_bundle"), s.get("app_name"), s.get("title"),
              s.get("file_path"), s.get("url"), s["start_ts"], s["end_ts"],
-             s.get("confidence", "unassigned"), s.get("billable", 1), s.get("note")),
+             confidence, int(bool(billable)), s.get("note")),
         )
         return cur.lastrowid
 
 
 def set_session_project(session_id, project_id, confidence="manual"):
     """Assign (or re-assign) a session to a project — used by the Review tab."""
+    if project_id is None:
+        confidence = "unassigned"
+    billable = _default_billable(confidence, project_id)
     with connect() as conn:
         conn.execute(
-            "UPDATE sessions SET project_id = ?, confidence = ? WHERE id = ?",
-            (project_id, confidence, session_id),
+            "UPDATE sessions SET project_id = ?, confidence = ?, billable = ? WHERE id = ?",
+            (project_id, confidence, billable, session_id),
         )
+
+
+def set_session_billable(session_id, billable):
+    """Toggle invoice inclusion; checking a guessed row confirms its project."""
+    with connect() as conn:
+        if billable:
+            conn.execute(
+                "UPDATE sessions SET "
+                "billable = CASE WHEN project_id IS NULL THEN 0 ELSE 1 END, "
+                "confidence = CASE "
+                "  WHEN project_id IS NOT NULL "
+                "   AND confidence NOT IN ('auto-file', 'auto-rule', 'manual') THEN 'manual' "
+                "  ELSE confidence END "
+                "WHERE id = ?",
+                (session_id,),
+            )
+        else:
+            conn.execute("UPDATE sessions SET billable = 0 WHERE id = ?", (session_id,))
 
 
 def delete_session(session_id):
@@ -199,7 +249,7 @@ def assign_unassigned_by_app(app_bundle, project_id):
     Returns how many were re-assigned."""
     with connect() as conn:
         cur = conn.execute(
-            "UPDATE sessions SET project_id = ?, confidence = 'auto-rule' "
+            "UPDATE sessions SET project_id = ?, confidence = 'auto-rule', billable = 1 "
             "WHERE project_id IS NULL AND app_bundle = ?",
             (project_id, app_bundle),
         )
@@ -215,3 +265,58 @@ def sessions_between(start_ts, end_ts):
             (start_ts, end_ts),
         )
         return [dict(r) for r in rows]
+
+
+def totals_between(start_ts, end_ts, rounding_minutes=0):
+    """Shared period totals for UI, menu bar, reports, and CSV export.
+
+    Tracked time includes every session. Billable time only includes explicitly
+    billable sessions with invoice-safe confidence; guessed/unassigned time stays
+    visible but does not affect amounts until the user confirms it.
+    """
+    with connect() as conn:
+        projects = {
+            r["id"]: dict(r)
+            for r in conn.execute("SELECT * FROM projects")
+        }
+        rows = conn.execute(
+            "SELECT * FROM sessions WHERE start_ts >= ? AND start_ts < ? ORDER BY start_ts",
+            (start_ts, end_ts),
+        )
+        by_project = {}
+        for row in rows:
+            s = dict(row)
+            pid = s["project_id"]
+            p = projects.get(pid)
+            entry = by_project.setdefault(pid, {
+                "project_id": pid,
+                "id": pid,
+                "project_name": p["name"] if p else "Unassigned",
+                "name": p["name"] if p else "Unassigned",
+                "employer": (p["employer"] if p else "") or "",
+                "rate": p["hourly_rate"] if p and p["hourly_rate"] else None,
+                "currency": p["currency"] if p else "EUR",
+                "color": p["color"] if p else None,
+                "tracked_seconds": 0.0,
+                "billable_seconds": 0.0,
+            })
+            seconds = max(0.0, s["end_ts"] - s["start_ts"])
+            entry["tracked_seconds"] += seconds
+            if session_is_billable(s):
+                entry["billable_seconds"] += seconds
+
+    for entry in by_project.values():
+        entry["billable_seconds"] = _round_seconds(entry["billable_seconds"], rounding_minutes)
+        entry["tracked_hours"] = entry["tracked_seconds"] / 3600.0
+        entry["billable_hours"] = entry["billable_seconds"] / 3600.0
+        rate = entry["rate"]
+        entry["amount"] = round(entry["billable_hours"] * rate, 2) if rate else None
+
+    rows = sorted(by_project.values(), key=lambda r: -r["tracked_seconds"])
+    return {
+        "tracked_seconds": sum(r["tracked_seconds"] for r in rows),
+        "billable_seconds": sum(r["billable_seconds"] for r in rows),
+        "billable_amount": sum(r["amount"] or 0.0 for r in rows),
+        "rows": rows,
+        "by_project_id": {r["project_id"]: r for r in rows},
+    }
