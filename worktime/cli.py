@@ -1,7 +1,7 @@
 """Command-line interface — headless use, setup, and testing without the menu bar.
 
     python -m worktime.cli add-project "Last Christmas" \
-        --folder "/Volumes/4TB HighSpeed/Logic/Pandoras Play/Last Christmas" \
+        --folder "/Volumes/4TB HighSpeed/ENSO/Clients/Pandoras Play/Last Christmas/Last Christmas" \
         --employer "Pandoras Play" --rate 80
     python -m worktime.cli list-projects
     python -m worktime.cli add-rule --project 1 --kind app --pattern com.tlphn.Telephone

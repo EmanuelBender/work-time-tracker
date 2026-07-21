@@ -7,7 +7,7 @@
   "entries": [
     {
       "id": "app",
-      "displayName": "WorktimeTracker App",
+      "displayName": "WorktimeTracker",
       "icon": "clock.arrow.circlepath",
       "type": "managedApplication",
       "workingDirectory": ".",

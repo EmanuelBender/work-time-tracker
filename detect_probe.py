@@ -45,7 +45,7 @@ AX_DOCUMENT = "AXDocument"
 AX_TITLE = "AXTitle"
 
 LOG_PATH = "probe_log.txt"
-SELF_PREFIX = "/Volumes/4TB HighSpeed/PROJECTS/_PROJECTS/WorktimeTracker"
+SELF_PREFIX = "/Volumes/4TB HighSpeed/WORKSPACE/Projects/Software/WorktimeTracker"
 
 
 def _ax_value(element, attribute):

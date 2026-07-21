@@ -30,7 +30,7 @@ Register a project (folder = one project):
 
 ```sh
 ./.venv/bin/python -m worktime.cli add-project "Last Christmas" \
-    --folder "/Volumes/4TB HighSpeed/Logic/Pandoras Play/Last Christmas" \
+    --folder "/Volumes/4TB HighSpeed/ENSO/Clients/Pandoras Play/Last Christmas/Last Christmas" \
     --employer "Pandoras Play" --rate 80
 ```
 
