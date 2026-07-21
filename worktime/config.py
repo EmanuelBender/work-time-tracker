@@ -12,6 +12,8 @@ DB_PATH = os.environ.get("WORKTIME_DB", os.path.join(_SUPPORT_DIR, "worktime.db"
 SAMPLE_INTERVAL = 5
 IDLE_THRESHOLD = 120        # no input for this long => treat as away (not billed)
 MIN_SESSION = 15            # discard sessions shorter than this (quick app flicks)
+MAX_TICK_GAP = 30           # ticks silent for this long (sleep, lid, stall) => the
+                            # machine wasn't being worked on; end the open session
 AX_MESSAGING_TIMEOUT = 2.0  # cap AX calls so a busy app (Logic) can't stall the loop
 
 # Frontmost apps we never attribute (transient system UI) — see spike findings.

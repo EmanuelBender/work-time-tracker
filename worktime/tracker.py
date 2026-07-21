@@ -5,6 +5,7 @@ or you go idle, it closes the open session and starts a new one. Only sessions
 hit the database — no row-per-tick.
 """
 
+import datetime
 import threading
 import time
 
@@ -21,6 +22,20 @@ def _activity_key(project_id, activity):
     # window, mixer and plugins), which would fragment a session below the
     # minimum length and drop it. A session's identity is project + app + doc.
     return (project_id, activity.get("app_bundle"), activity.get("file_path"))
+
+
+def _day_slices(start_ts, end_ts):
+    """Split [start_ts, end_ts] at local midnights so daily totals stay exact."""
+    slices, cur = [], start_ts
+    while True:
+        day = datetime.date.fromtimestamp(cur)
+        midnight = datetime.datetime.combine(
+            day + datetime.timedelta(days=1), datetime.time.min).timestamp()
+        if end_ts <= midnight:
+            slices.append((cur, end_ts))
+            return slices
+        slices.append((cur, midnight))
+        cur = midnight
 
 
 class Tracker:
@@ -69,6 +84,15 @@ class Tracker:
 
     def _tick(self):
         now = time.time()
+        if self._current:
+            gap = now - self._current["last_ts"]
+            if gap > config.MAX_TICK_GAP:
+                # The sampler went silent (sleep, closed lid, suspension). The
+                # gap must never be billed: end the session at the last live
+                # sample instead of letting last_ts jump across it.
+                self._close_current(now)
+                if gap >= config.IDLE_THRESHOLD:
+                    self._context_project_id = None
         activity = self.detector.sample()
         if activity is None:
             return  # ignored / no frontmost -> leave the current session as-is
@@ -131,14 +155,15 @@ class Tracker:
         a = c["activity"]
         log.info("logged %3ds  %-18s [%s]  %s", int(c["last_ts"] - c["start_ts"]),
                  a.get("app_name"), c["confidence"], a.get("file_path") or a.get("title") or "")
-        db.insert_session({
-            "project_id": c["project_id"],
-            "app_bundle": a.get("app_bundle"),
-            "app_name": a.get("app_name"),
-            "title": a.get("title"),
-            "file_path": a.get("file_path"),
-            "url": a.get("url"),
-            "start_ts": c["start_ts"],
-            "end_ts": c["last_ts"],
-            "confidence": c["confidence"],
-        })
+        for start_ts, end_ts in _day_slices(c["start_ts"], c["last_ts"]):
+            db.insert_session({
+                "project_id": c["project_id"],
+                "app_bundle": a.get("app_bundle"),
+                "app_name": a.get("app_name"),
+                "title": a.get("title"),
+                "file_path": a.get("file_path"),
+                "url": a.get("url"),
+                "start_ts": start_ts,
+                "end_ts": end_ts,
+                "confidence": c["confidence"],
+            })

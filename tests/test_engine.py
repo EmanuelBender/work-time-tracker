@@ -3,12 +3,13 @@
 Run:  ./.venv/bin/python -m pytest -q
 """
 
+import datetime
 import time
 
 import pytest
 
 from worktime import attribution, config, db
-from worktime.tracker import Tracker
+from worktime.tracker import Tracker, _day_slices
 
 
 @pytest.fixture
@@ -100,6 +101,54 @@ def test_idle_clears_context(store, monkeypatch):
     assert tr._context_project_id is None
     tr._tick()                                   # back, no context -> unassigned
     assert tr._current["project_id"] is None
+
+
+def test_tick_gap_is_never_billed(store, monkeypatch):
+    """Sleep/wake: an open session must end at the last live sample, not
+    absorb the hours in between."""
+    monkeypatch.setattr(config, "MIN_SESSION", 0)
+    store.add_project("P", folder="/work/p")
+    tr = Tracker()
+    tr.detector = _Fake([_act(bundle="com.apple.logic10", file="/work/p/s.logicx")] * 2)
+    tr._tick()
+    last_seen = time.time() - 7200                     # 2h of silence (sleep)
+    tr._current["start_ts"] = last_seen - 600
+    tr._current["last_ts"] = last_seen
+    tr._tick()
+    closed = store.sessions_between(0, 2 ** 31)
+    assert len(closed) == 1
+    assert closed[0]["end_ts"] == pytest.approx(last_seen)
+    assert tr._current["start_ts"] == pytest.approx(time.time(), abs=5)
+
+
+def test_tick_gap_clears_inference_context(store, monkeypatch):
+    monkeypatch.setattr(config, "MIN_SESSION", 0)
+    store.add_project("P", folder="/work/p")
+    tr = Tracker()
+    tr.detector = _Fake([_act(bundle="com.apple.logic10", file="/work/p/s.logicx"),
+                         _act(bundle="com.soundly", app="Soundly")])
+    tr._tick()
+    tr._current["last_ts"] = time.time() - 7200
+    tr._tick()                                         # back after sleep, no signal
+    assert tr._current["confidence"] == "unassigned"
+
+
+def test_sessions_split_at_midnight(store, monkeypatch):
+    monkeypatch.setattr(config, "MIN_SESSION", 0)
+    midnight = datetime.datetime.combine(
+        datetime.date.today(), datetime.time.min).timestamp()
+    tr = Tracker()
+    tr._current = {"key": ("k",), "start_ts": midnight - 3600, "last_ts": midnight + 1800,
+                   "project_id": None, "confidence": "unassigned", "activity": _act()}
+    tr._close_current(time.time())
+    spans = [(r["start_ts"], r["end_ts"]) for r in store.sessions_between(0, 2 ** 31)]
+    assert spans == [(midnight - 3600, midnight), (midnight, midnight + 1800)]
+
+
+def test_day_slices_within_one_day_is_untouched():
+    noon = datetime.datetime.combine(
+        datetime.date.today(), datetime.time(12)).timestamp()
+    assert _day_slices(noon, noon + 3600) == [(noon, noon + 3600)]
 
 
 def test_min_session_drops_short(store, monkeypatch):

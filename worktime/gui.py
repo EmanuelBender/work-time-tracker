@@ -151,8 +151,9 @@ def period_bounds(period):
         start = today.replace(day=1)
     else:
         start = today
-    s = datetime.datetime(start.year, start.month, start.day).timestamp()
-    e = datetime.datetime(today.year, today.month, today.day).timestamp() + 86400
+    s = datetime.datetime.combine(start, datetime.time.min).timestamp()
+    e = datetime.datetime.combine(
+        today + datetime.timedelta(days=1), datetime.time.min).timestamp()
     return s, e
 
 
