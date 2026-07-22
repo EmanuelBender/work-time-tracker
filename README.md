@@ -12,13 +12,20 @@ See [PLAN.md](PLAN.md) for the full design and phased roadmap.
 
 ## Status
 
-Detection engine, SQLite store (versioned migrations), attribution, and the
-sampling state machine are built and validated against real apps (Logic Pro,
-Mail, Safari, Telephone, Claude/Codex). The UI is a **PySide6** app — a native
-menu-bar item plus **Review / Projects / Reports / Rules** views.
-Review-and-assign is the core: track everything, then assign unknowns with a
-click. Reports show each project's fee and live effective €/h. `cli.py` is a
-dev tool only.
+Detection engine, SQLite store (versioned migrations, daily backups),
+attribution, and the sampling state machine are built and validated against
+real apps (Logic Pro, Mail, Safari, Telephone, Claude/Codex). The UI is a
+**PySide6** app — a native menu-bar item plus **Review / Projects / Reports /
+Rules** views. Review-and-assign is the core: track everything, then assign
+unknowns with a click.
+
+Accuracy model (v0.3.0): playback counts as work (listening passes, video
+review, calls — via power assertions, capped), project names/folder basenames
+auto-match window titles (Terminal/agent sessions, Blender, mail subjects),
+inference expires after 30 min, and off-computer work is added as manual
+blocks. Reports show each project's fee, effective €/h coloured against your
+target rate, and an attribution-coverage line that tells you how much time
+attributed itself. `cli.py` is a dev tool only.
 
 ## Setup
 

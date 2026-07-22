@@ -45,25 +45,35 @@ browser URL, window title, idle?)* every few seconds:
 
 1. **File match** (auto, no setup) — an open document under a registered project
    folder. Covers the bulk of billable work with zero tagging.
-2. **Learned rule** (taught once) — an identifier mapped to a project: email
-   domain/sender, phone number, browser URL/domain, chat contact, or whole app.
-   A handful per employer; thereafter automatic.
-3. **Manual timer** — you explicitly started a project timer.
+2. **Learned rule** (taught once) — an identifier mapped to a project: browser
+   URL/domain, title keyword, or whole app. A handful per employer; thereafter
+   automatic.
+3. **Title match** (auto, no setup — added v0.3.0) — a registered project name
+   or folder basename appears in the window title: Terminal/agent sessions
+   showing a cwd, Blender's path-in-title, mail subjects naming the project.
+   Min-length guard; longest candidate wins.
 4. **Session inference** (suggested, not billed) — none of the above, but you
-   were *just* in a strong project context, so adjacent non-file work (the email
-   or call right after) is *proposed* for that project.
+   were *just* in a strong project context, so adjacent non-file work is
+   *proposed* for that project. Expires 30 min after the last strong signal.
 5. **Unassigned** — nothing matched → bucket for quick review.
 
 **Confidence tiers keep billing trustworthy:**
-- **Auto-billable:** file match, learned rule, manual timer.
+- **Auto-billable:** file match, learned rule, title match, manual blocks/edits.
 - **Suggested (1-click confirm):** session inference, repeated-pattern guesses.
 - **Unknown:** unassigned — you pick.
+
+**Attribution coverage** (Reports footer) tracks how much time attributed
+itself vs. needed the user — the number that decides where accuracy work goes
+next.
 
 **Teach-once loop:** when you assign an unattributed block to a project, the app
 offers to remember the mapping as a rule (this domain / number / URL / app →
 this project). Manual effort is front-loaded and decays as rules accumulate.
 
-Idle slices (no input past a threshold) are dropped, never billed.
+Idle slices (no input past a threshold) are dropped, never billed — with one
+deliberate exception: if the frontmost app is actually *playing* (it holds a
+no-idle-sleep power assertion), the session continues. Listening passes, video
+review, and calls are work; the grace is capped at 30 min without input.
 
 **Mechanism:** the sampler is an **in-memory state machine**, not a row-per-tick
 logger. It holds the current activity; when the resolved *(project, app, file/url,
@@ -76,6 +86,9 @@ rows hit the database — lean and cheap.
 - Minimum session length: **15 s** (ignore quick app flicks)
 - Max tick gap: **30 s** — silent ticks (sleep, lid, stalls) end the open
   session at the last live sample; gaps are never billed
+- Media grace: playback extends past idle, at most **30 min** without input
+- Title match: candidates ≥ **5 chars**; inference context TTL **30 min**
+- Target rate: **80 €/h** — the wage-health benchmark colouring Reports
 
 ### Detection spike findings (validated 2026-06-18; the spike script is
 ### retired — its logic lives on in `detector.py`)
@@ -189,10 +202,12 @@ Replaces the spike's CLI + rumps. Built on the (unchanged) detection engine.
 - ~~Rounding rules~~ — obsolete under the fixed-fee model.
 
 ### Phase 3 — Timeline review & manual fallback
-- [ ] Timeline / day view of sessions; see what was tracked.
-- [ ] Edit, merge, split, reassign sessions to projects.
-- [ ] Manual start/stop project timer from the menu bar.
-- [ ] Assign unattributed/idle blocks to a project (or mark non-billable).
+- [x] Timeline / day view of sessions; see what was tracked (`TimelineWidget`).
+- [x] Edit session times + reassign (Review ✎); merge/split still open.
+- [x] **Manual work blocks** — off-computer project time (calls, meetings,
+      studio sessions) added after the fact; billable, part of the wage gauge.
+      (Live start/stop timer: declined — review-first instead.)
+- [x] Assign unattributed blocks to a project / mark non-billable (Review).
 - [ ] "Approve before invoice" — lock a period once reviewed.
 
 ### Phase 4 — Activity & browser tracking (non-file work)
@@ -207,7 +222,8 @@ Replaces the spike's CLI + rumps. Built on the (unchanged) detection engine.
 ### Phase 5 — Intelligence & polish
 - [ ] Smart suggestions: auto-categorize repeated unattributed patterns.
 - [ ] Charts in reports (time per project/employer over time).
-- [ ] Automatic local backups; data export/import.
+- [x] Automatic local backups (rotating daily snapshots, keep 7).
+- [ ] Data export/import.
 - [ ] Launch at login; lightweight, battery-friendly sampling.
 - [ ] App icon, onboarding polish, preferences.
 
@@ -246,13 +262,23 @@ Replaces the spike's CLI + rumps. Built on the (unchanged) detection engine.
 > helpers unified (timeutil / reporting / attribution.url_domain), ✅
 > status-bar menu no longer rebuilds while open.
 
+> Accuracy sprint 2026-07-22 (v0.3.0): ✅ attribution-coverage metric (Reports
+> footer), ✅ playback counts as work (power-assertion idle override, 30-min
+> cap; tested against real pmset output — incl. the coreaudiod Created-for-PID
+> mapping and Electron's junk assertion), ✅ zero-config title↔project
+> matching (`auto-title`), ✅ inference context TTL, ✅ manual work blocks +
+> session time editing, ✅ target-rate colouring, ✅ rotating daily backups,
+> ✅ offscreen GUI smoke tests.
+
 Remaining, prioritised:
+0. **Validate live for a week** — read the coverage number, tune knobs
+   (TTL, media cap, title min-length) from real data before adding detectors.
 1. **Launch at login + real `.app` bundle** (LSUIElement to hide the dock icon,
-   app icon) — only after robustness is proven.
-2. **Session editing** — adjust times, split, merge (accuracy of the wage gauge).
+   app icon; Accessibility then attaches to the app, not the terminal).
+2. **Session merge/split** (edit + reassign exist).
 3. **Idle-return prompt** — "you were away N min — keep / discard / assign?"
-4. Local DB backups + export/import.   5. Remember window size & last tab.
-6. Empty states + a tag legend.   7. `lsof` fallback when AXDocument is blank.
+4. Remember window size & last tab.   5. Empty states + a tag legend.
+6. `lsof` fallback — only if the coverage metric proves a real gap.
 
 ## Edge cases & notes (don't forget)
 
