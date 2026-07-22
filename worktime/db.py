@@ -270,6 +270,13 @@ def set_session_billable(session_id, billable):
             conn.execute("UPDATE sessions SET billable = 0 WHERE id = ?", (session_id,))
 
 
+def update_session_times(session_id, start_ts, end_ts):
+    """Adjust a session's span — the Review edit dialog."""
+    with _conn() as conn:
+        conn.execute("UPDATE sessions SET start_ts = ?, end_ts = ? WHERE id = ?",
+                     (start_ts, end_ts, session_id))
+
+
 def delete_session(session_id):
     """Remove a tracked entry entirely (cleanup of unrelated activity)."""
     with _conn() as conn:

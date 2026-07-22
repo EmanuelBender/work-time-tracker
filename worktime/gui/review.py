@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
 from .. import db
 from ..attribution import url_domain
 from ..timeutil import PERIODS, fmt_hm, fmt_hms, period_bounds
+from .session_dialog import SessionDialog
 from .theme import dot, project_color
 from .widgets import ProjectRail, TimelineWidget
 
@@ -34,6 +35,9 @@ class ReviewView(QWidget):
         self.period = QComboBox(); self.period.addItems(PERIODS)
         self.period.currentTextChanged.connect(self.refresh)
         bar.addWidget(QLabel("List:")); bar.addWidget(self.period); bar.addStretch()
+        addb = QPushButton("＋ Add block", clicked=self._add_block)
+        addb.setToolTip("Record off-computer work: a call, meeting, studio session…")
+        bar.addWidget(addb)
         bar.addWidget(QPushButton("Refresh", clicked=self.refresh))
         rv.addLayout(bar)
 
@@ -49,7 +53,7 @@ class ReviewView(QWidget):
                           3: QHeaderView.Fixed, 4: QHeaderView.Fixed, 5: QHeaderView.Fixed,
                           6: QHeaderView.Fixed}.items():
             hd.setSectionResizeMode(col, mode)
-        for col, wpx in {0: 96, 1: 80, 3: 64, 4: 200, 5: 64, 6: 120}.items():
+        for col, wpx in {0: 96, 1: 80, 3: 64, 4: 200, 5: 64, 6: 148}.items():
             self.table.setColumnWidth(col, wpx)
         rv.addWidget(self.table)
         h.addWidget(right, 1)
@@ -116,10 +120,13 @@ class ReviewView(QWidget):
             rule_b = QPushButton("rule"); rule_b.setObjectName("mini")
             rule_b.setToolTip("Make a rule (app / site / title) → the assigned project")
             rule_b.clicked.connect(lambda _c=False, s=s, cb=combo: self._rule_menu(s, cb))
+            edit_b = QPushButton("✎"); edit_b.setObjectName("mini"); edit_b.setFixedWidth(28)
+            edit_b.setToolTip("Edit start time / duration")
+            edit_b.clicked.connect(lambda _c=False, s=s: self._edit_times(s))
             del_b = QPushButton("✕"); del_b.setObjectName("mini"); del_b.setFixedWidth(28)
             del_b.setToolTip("Remove this entry (cleanup — does not make a rule)")
             del_b.clicked.connect(lambda _c=False, sid=s["id"]: self._delete(sid))
-            ah.addWidget(rule_b); ah.addWidget(del_b)
+            ah.addWidget(rule_b); ah.addWidget(edit_b); ah.addWidget(del_b)
             self.table.setCellWidget(r, 6, acts)
 
     def _assign(self, session_id, combo):
@@ -133,6 +140,23 @@ class ReviewView(QWidget):
     def _delete(self, session_id):
         db.delete_session(session_id)
         self.refresh()
+
+    def _add_block(self):
+        projects = db.list_projects()
+        if not projects:
+            QMessageBox.information(self, "No projects", "Add a project first.")
+            return
+        dlg = SessionDialog(projects=projects, parent=self)
+        if dlg.exec():
+            db.insert_session(dlg.block())
+            self.refresh()
+
+    def _edit_times(self, session):
+        dlg = SessionDialog(session=session, parent=self)
+        if dlg.exec():
+            start_ts, end_ts = dlg.span()
+            db.update_session_times(session["id"], start_ts, end_ts)
+            self.refresh()
 
     def _rule_menu(self, session, combo):
         pid = combo.currentData()

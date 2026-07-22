@@ -82,6 +82,20 @@ def test_no_fee_or_no_billable_time_means_no_rate(store):
     assert store.totals_between(0, 3600)["by_project_id"][fee_only]["eff_rate"] is None
 
 
+def test_manual_block_is_billable_and_editable(store):
+    project = store.add_project("P", fee=100)
+    sid = store.insert_session({
+        "project_id": project, "app_name": "client call",
+        "start_ts": 0, "end_ts": 3600, "confidence": "manual"})
+
+    row = store.totals_between(0, 7200)["by_project_id"][project]
+    assert row["billable_seconds"] == 3600
+
+    store.update_session_times(sid, 0, 7200)
+    row = store.totals_between(0, 7200)["by_project_id"][project]
+    assert row["billable_seconds"] == 7200
+
+
 def test_attribution_coverage_breakdown(store):
     project = store.add_project("P", fee=100)
     store.insert_session(_session(project, 0, 600, "auto-file"))
