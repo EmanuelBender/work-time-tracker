@@ -3,14 +3,24 @@
 import csv
 
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QComboBox, QFileDialog, QHBoxLayout, QHeaderView, QLabel, QMessageBox,
     QPushButton, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
-from .. import db
+from .. import config, db
 from ..reporting import coverage_line, report_csv_rows
 from ..timeutil import PERIODS, period_bounds
+
+
+def rate_color(eff_rate):
+    """Wage health against the target rate: green / amber / red."""
+    if eff_rate >= config.TARGET_RATE:
+        return "#2FB89B"
+    if eff_rate >= 0.75 * config.TARGET_RATE:
+        return "#E0A23B"
+    return "#E06A6A"
 
 
 class ReportsView(QWidget):
@@ -29,7 +39,8 @@ class ReportsView(QWidget):
             ["Project", "Employer", "Tracked", "Billable", "Fee", "€/h"]
         )
         self.table.horizontalHeaderItem(5).setToolTip(
-            "Effective wage: fee ÷ all billable hours the project ever took")
+            "Effective wage: fee ÷ all billable hours the project ever took.\n"
+            f"Target {config.TARGET_RATE:g} €/h — green ≥ target, amber ≥ 75 %, red below.")
         self.table.verticalHeader().setVisible(False)
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
         v.addWidget(self.table)
@@ -61,6 +72,8 @@ class ReportsView(QWidget):
             ]
             for c, val in enumerate(cells):
                 item = QTableWidgetItem(val); item.setFlags(item.flags() & ~Qt.ItemIsEditable)
+                if c == 5 and row["eff_rate"]:
+                    item.setForeground(QColor(rate_color(row["eff_rate"])))
                 self.table.setItem(r, c, item)
         self.coverage.setText(coverage_line(summary))
         self.total.setText(

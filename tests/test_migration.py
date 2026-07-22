@@ -1,6 +1,7 @@
-"""The v0 → v1 migration against a real legacy database file."""
+"""Schema lifecycle: the v0 → v1 migration and the daily backup rotation."""
 
 import sqlite3
+import time
 
 import pytest
 
@@ -101,6 +102,22 @@ def test_init_db_is_idempotent_after_migration(legacy_path):
     db.init_db()      # no error, no double-migration
     assert _columns(legacy_path, "projects") == {
         "id", "name", "employer", "fee", "color", "created_ts"}
+
+
+def test_daily_backup_rotation(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "DB_PATH", str(tmp_path / "t.db"))
+    bdir = tmp_path / "backups"
+    bdir.mkdir()
+    for i in range(1, 10):                       # stale snapshots beyond the limit
+        (bdir / f"worktime-2026-01-{i:02d}.db").write_bytes(b"x")
+
+    db.init_db()
+    snaps = sorted(p.name for p in bdir.glob("worktime-*.db"))
+    assert len(snaps) == db.BACKUP_KEEP
+    assert snaps[-1] == time.strftime("worktime-%Y-%m-%d.db")
+
+    db.init_db()                                 # same day: idempotent
+    assert len(list(bdir.glob("worktime-*.db"))) == db.BACKUP_KEEP
 
 
 def test_fresh_db_starts_at_current_version(tmp_path, monkeypatch):

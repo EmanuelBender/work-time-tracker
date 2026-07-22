@@ -21,6 +21,10 @@ TITLE_MATCH_MIN = 5         # project names/folder basenames shorter than this n
                             # title-match (guards against false positives)
 INFERENCE_TTL = 1800        # infer from the last strong project context for at most
                             # this long without a fresh strong signal
+
+# The wage-health benchmark: what a project *should* pay per hour. Colours the
+# Reports €/h column (green ≥ target, amber ≥ 75 %, red below). Set yours.
+TARGET_RATE = 80.0
 AX_MESSAGING_TIMEOUT = 2.0  # cap AX calls so a busy app (Logic) can't stall the loop
 
 # Frontmost apps we never attribute (transient system UI) — see spike findings.

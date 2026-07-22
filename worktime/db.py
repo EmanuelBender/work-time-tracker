@@ -109,6 +109,27 @@ def _backup(conn, version):
         dest.close()
 
 
+BACKUP_KEEP = 7
+
+
+def _daily_backup(conn):
+    """Rotating daily snapshot — billing data on a single file deserves it."""
+    bdir = os.path.join(os.path.dirname(config.DB_PATH), "backups")
+    os.makedirs(bdir, exist_ok=True)
+    dest_path = os.path.join(bdir, time.strftime("worktime-%Y-%m-%d.db"))
+    if os.path.exists(dest_path):
+        return
+    dest = sqlite3.connect(dest_path)
+    try:
+        conn.backup(dest)
+    finally:
+        dest.close()
+    snapshots = sorted(f for f in os.listdir(bdir)
+                       if f.startswith("worktime-") and f.endswith(".db"))
+    for old in snapshots[:-BACKUP_KEEP]:
+        os.remove(os.path.join(bdir, old))
+
+
 def init_db():
     os.makedirs(os.path.dirname(config.DB_PATH), exist_ok=True)
     with _conn() as conn:
@@ -124,6 +145,8 @@ def init_db():
             for step in MIGRATIONS[version:SCHEMA_VERSION]:
                 step(conn)
         conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+        conn.commit()           # the backup API blocks on any open write txn
+        _daily_backup(conn)
 
 
 # --- projects ---------------------------------------------------------------
