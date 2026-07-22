@@ -109,12 +109,26 @@ it taught us.
   Christmas`) and live under `/Volumes/...`. Registration must support both
   "this folder = one project" and "this folder = an employer, each subfolder =
   a project." Folder matching must handle `/Volumes` paths and spaces.
-- ❌ **Electron apps (Claude, Codex, and similar AI tools):** `AXDocument` is
-  empty, `lsof` shows only GPU-cache noise, window title is useless (`'Claude'`).
-  → app-rule + manual project assignment (Phase 4).
+- ❌ **Electron apps (Claude, ChatGPT, Codex desktop) — deep-probed 2026-07-22:**
+  the conversation / project is unreachable by *any* OS detector. Window title
+  is just `'Claude'` / `'ChatGPT'`; `AXDocument` empty; `lsof` GPU-cache noise;
+  and a **full AX-tree walk** shows the web content is not exposed at all — the
+  window is an empty shell (1 window → ~10 empty groups → 3 buttons); every
+  reachable string is the native menu bar. So there is nothing to read, not
+  merely something hard to read. Attribution for these apps therefore rests on:
+  (1) **session inference** from the current strong project context — the
+  intended bridge, and the reason a correct project folder matters; (2) using
+  **claude.ai / chatgpt.com in a browser** instead, where the URL *and* page
+  title (= the conversation title) are readable and `auto-title`/rules catch
+  them — browser beats the desktop app for attribution; (3) manual assignment
+  or a live "working on X" context. Terminal-run tools (codex CLI) are the easy
+  case — the terminal title carries the cwd. An `AXManualAccessibility` hint can
+  sometimes force Electron to build its tree, but is fragile and costs the
+  target app performance — not pursued.
 - ✉️ **Mail:** no document, but the window title carries the **email subject**
-  (`'Re: Aufnahmen'`) and mailbox name. → subject/mailbox → project keyword
-  rules (Phase 4).
+  (`'Re: Aufnahmen'`) and mailbox name — so `auto-title` (v0.3.0) already
+  attributes it whenever the subject names the project; title rules cover the
+  rest. Better placed than the Electron apps, not worse.
 - 🌐 **Safari:** window title is the **page title** (`'OFFICE — FINANCE - Google
   Sheets'`); `AXDocument` empty, lsof cache-only. For real attribution, read the
   tab **URL** via AppleScript. → URL/title rules (Phase 4).
