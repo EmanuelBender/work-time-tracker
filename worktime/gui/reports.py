@@ -9,7 +9,7 @@ from PySide6.QtWidgets import (
 )
 
 from .. import db
-from ..reporting import report_csv_rows
+from ..reporting import coverage_line, report_csv_rows
 from ..timeutil import PERIODS, period_bounds
 
 
@@ -33,8 +33,14 @@ class ReportsView(QWidget):
         self.table.verticalHeader().setVisible(False)
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
         v.addWidget(self.table)
+        foot = QHBoxLayout()
+        self.coverage = QLabel(); self.coverage.setObjectName("muted")
+        self.coverage.setToolTip("Share of tracked time by attribution: automatic "
+                                 "(file / rule / title), confirmed by you, guessed, unknown")
+        foot.addWidget(self.coverage); foot.addStretch()
         self.total = QLabel(); self.total.setObjectName("big")
-        v.addWidget(self.total, alignment=Qt.AlignRight)
+        foot.addWidget(self.total)
+        v.addLayout(foot)
 
     def _summary(self):
         start, end = period_bounds(self.period.currentText())
@@ -56,6 +62,7 @@ class ReportsView(QWidget):
             for c, val in enumerate(cells):
                 item = QTableWidgetItem(val); item.setFlags(item.flags() & ~Qt.ItemIsEditable)
                 self.table.setItem(r, c, item)
+        self.coverage.setText(coverage_line(summary))
         self.total.setText(
             f"Tracked {summary['tracked_seconds'] / 3600:.1f} h · "
             f"billable {summary['billable_seconds'] / 3600:.1f} h")

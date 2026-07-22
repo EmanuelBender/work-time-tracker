@@ -4,7 +4,7 @@ the effective wage (fee / billable hours) is still healthy."""
 import pytest
 
 from worktime import config, db
-from worktime.reporting import REPORT_CSV_HEADER, report_csv_rows
+from worktime.reporting import REPORT_CSV_HEADER, coverage_line, report_csv_rows
 
 
 @pytest.fixture
@@ -80,6 +80,25 @@ def test_no_fee_or_no_billable_time_means_no_rate(store):
     fee_only = store.add_project("Q", fee=100)
     store.insert_session(_session(fee_only, 0, 3600, "inferred"))
     assert store.totals_between(0, 3600)["by_project_id"][fee_only]["eff_rate"] is None
+
+
+def test_attribution_coverage_breakdown(store):
+    project = store.add_project("P", fee=100)
+    store.insert_session(_session(project, 0, 600, "auto-file"))
+    store.insert_session(_session(project, 600, 800, "manual"))
+    store.insert_session(_session(project, 800, 900, "inferred"))
+    store.insert_session(_session(None, 900, 1000, "unassigned"))
+
+    summary = store.totals_between(0, 1000)
+    assert summary["confidence_seconds"] == {
+        "auto-file": 600, "manual": 200, "inferred": 100, "unassigned": 100}
+    line = coverage_line(summary)
+    assert "60% auto" in line and "20% you" in line
+    assert "10% guessed" in line and "10% unknown" in line
+
+
+def test_coverage_line_empty_period(store):
+    assert coverage_line(store.totals_between(0, 1)) == ""
 
 
 def test_report_csv_rows_match_shared_aggregation(store):

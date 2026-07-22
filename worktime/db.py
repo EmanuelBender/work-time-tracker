@@ -316,6 +316,7 @@ def totals_between(start_ts, end_ts):
             f"  AND confidence IN ({placeholders}) GROUP BY project_id",
             tuple(BILLABLE_CONFIDENCES))}
         by_project = {}
+        confidence_seconds = {}
         for row in conn.execute(
                 "SELECT * FROM sessions WHERE start_ts >= ? AND start_ts < ?",
                 (start_ts, end_ts)):
@@ -333,6 +334,8 @@ def totals_between(start_ts, end_ts):
             })
             seconds = max(0.0, s["end_ts"] - s["start_ts"])
             entry["tracked_seconds"] += seconds
+            confidence_seconds[s["confidence"]] = (
+                confidence_seconds.get(s["confidence"], 0.0) + seconds)
             if session_is_billable(s):
                 entry["billable_seconds"] += seconds
 
@@ -348,6 +351,7 @@ def totals_between(start_ts, end_ts):
     return {
         "tracked_seconds": sum(r["tracked_seconds"] for r in rows),
         "billable_seconds": sum(r["billable_seconds"] for r in rows),
+        "confidence_seconds": confidence_seconds,
         "rows": rows,
         "by_project_id": {r["project_id"]: r for r in rows},
     }
