@@ -17,6 +17,10 @@ MAX_TICK_GAP = 30           # ticks silent for this long (sleep, lid, stall) => 
 MEDIA_IDLE_MAX = 1800       # playback (no-idle-sleep assertion) may extend a session
                             # past the idle threshold — listening passes, video review,
                             # calls — but never longer than this without any input
+TITLE_MATCH_MIN = 5         # project names/folder basenames shorter than this never
+                            # title-match (guards against false positives)
+INFERENCE_TTL = 1800        # infer from the last strong project context for at most
+                            # this long without a fresh strong signal
 AX_MESSAGING_TIMEOUT = 2.0  # cap AX calls so a busy app (Logic) can't stall the loop
 
 # Frontmost apps we never attribute (transient system UI) — see spike findings.

@@ -79,8 +79,9 @@ class ReviewView(QWidget):
             activity = f"{s['app_name'] or ''}"
             if detail:
                 activity += f"   ·   {detail}"
-            tag = {"auto-file": "auto", "auto-rule": "rule", "manual": "you",
-                   "inferred": "guess", "unassigned": "new"}.get(s["confidence"], s["confidence"])
+            tag = {"auto-file": "auto", "auto-rule": "rule", "auto-title": "title",
+                   "manual": "you", "inferred": "guess",
+                   "unassigned": "new"}.get(s["confidence"], s["confidence"])
             needs_review = s["project_id"] is None or s["confidence"] == "inferred"
             for c, val in enumerate([when, fmt_hms(s["end_ts"] - s["start_ts"]), activity, tag]):
                 item = QTableWidgetItem(str(val))

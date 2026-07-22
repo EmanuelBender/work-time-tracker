@@ -12,7 +12,8 @@ from contextlib import contextmanager
 
 from . import config
 
-BILLABLE_CONFIDENCES = {"auto-file", "auto-rule", "manual"}
+BILLABLE_CONFIDENCES = {"auto-file", "auto-rule", "auto-title", "manual"}
+_BILLABLE_SQL = ", ".join(f"'{c}'" for c in sorted(BILLABLE_CONFIDENCES))
 
 SCHEMA_VERSION = 1
 
@@ -36,7 +37,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     url         TEXT,
     start_ts    REAL NOT NULL,
     end_ts      REAL NOT NULL,
-    confidence  TEXT NOT NULL,              -- auto-file | auto-rule | manual | inferred | unassigned
+    confidence  TEXT NOT NULL,              -- auto-file | auto-rule | auto-title | manual | inferred | unassigned
     billable    INTEGER NOT NULL DEFAULT 1
 );
 
@@ -260,7 +261,7 @@ def set_session_billable(session_id, billable):
                 "billable = CASE WHEN project_id IS NULL THEN 0 ELSE 1 END, "
                 "confidence = CASE "
                 "  WHEN project_id IS NOT NULL "
-                "   AND confidence NOT IN ('auto-file', 'auto-rule', 'manual') THEN 'manual' "
+                f"   AND confidence NOT IN ({_BILLABLE_SQL}) THEN 'manual' "
                 "  ELSE confidence END "
                 "WHERE id = ?",
                 (session_id,),

@@ -67,6 +67,51 @@ def test_unassigned_when_nothing_matches(store):
     assert pid is None and conf == "unassigned"
 
 
+# --- zero-config title matching ---------------------------------------------
+def test_title_matches_project_name(store):
+    p = store.add_project("Last Christmas")
+    pid, conf, why = _resolve(store, _act(bundle="com.apple.mail",
+                                          title="Re: Last Christmas stems"))
+    assert (pid, conf, why) == (p, "auto-title", "last christmas")
+
+
+def test_title_matches_folder_basename(store):
+    p = store.add_project("LC", folder="/clients/pp/Last Christmas")
+    pid, conf, _ = _resolve(store, _act(bundle="com.apple.Terminal",
+                                        title="…/Last Christmas — claude"))
+    assert (pid, conf) == (p, "auto-title")
+
+
+def test_short_names_never_title_match(store):
+    store.add_project("Mix", folder="/work/Mix")   # < TITLE_MATCH_MIN chars
+    pid, conf, _ = _resolve(store, _act(title="Mix session notes"))
+    assert (pid, conf) == (None, "unassigned")
+
+
+def test_rule_beats_title_match(store):
+    a = store.add_project("Last Christmas")
+    b = store.add_project("Other Project")
+    store.add_rule(b, "app", "com.some.app")
+    pid, conf, _ = _resolve(store, _act(bundle="com.some.app",
+                                        title="Last Christmas notes"))
+    assert (pid, conf) == (b, "auto-rule")
+
+
+def test_file_match_beats_title_match(store):
+    a = store.add_project("Last Christmas")
+    b = store.add_project("B Project", folder="/work/b")
+    pid, conf, _ = _resolve(store, _act(file="/work/b/x.logicx",
+                                        title="Last Christmas reference"))
+    assert (pid, conf) == (b, "auto-file")
+
+
+def test_longest_title_candidate_wins(store):
+    short = store.add_project("Christmas")
+    longer = store.add_project("Last Christmas")
+    pid, _, why = _resolve(store, _act(title="Last Christmas - Tracks"))
+    assert pid == longer and why == "last christmas"
+
+
 # --- tracker: inference + idle ---------------------------------------------
 class _Fake:
     def __init__(self, items, media=False):
@@ -91,6 +136,19 @@ def test_inference_follows_active_project(store, monkeypatch):
     assert tr._context_project_id == p
     tr._tick()
     assert tr._current["project_id"] == p and tr._current["confidence"] == "inferred"
+
+
+def test_inference_context_expires(store, monkeypatch):
+    monkeypatch.setattr(config, "MIN_SESSION", 0)
+    store.add_project("P", folder="/work/p")
+    tr = Tracker()
+    tr.detector = _Fake([_act(bundle="com.apple.logic10", file="/work/p/s.logicx"),
+                         _act(bundle="com.soundly", app="Soundly")])
+    tr._tick()
+    tr._context_ts -= config.INFERENCE_TTL + 60   # strong signal long gone
+    tr._tick()
+    assert tr._current["confidence"] == "unassigned"
+    assert tr._context_project_id is None
 
 
 def test_idle_clears_context(store, monkeypatch):

@@ -1,12 +1,16 @@
 """Resolve a detected activity to a billing project.
 
 The chain: file match (a document under a registered project folder), then a
-learned rule (app / url_domain / title_contains), else unassigned. Session
-inference — carrying the last strong project context — lives in the tracker.
+learned rule (app / url_domain / title_contains), then a zero-config title
+match (a project name or folder basename appearing in the window title), else
+unassigned. Session inference — carrying the last strong project context —
+lives in the tracker.
 """
 
 import os
 import urllib.parse
+
+from . import config
 
 
 def _folder_match(file_path, folders):
@@ -52,6 +56,27 @@ def _rule_match(activity, projects, rules):
     return None
 
 
+def _title_match(activity, projects, folders):
+    """(project_id, matched_text) when a project name or folder basename
+    appears in the window title — zero-config coverage for apps whose only
+    signal is the title: Terminal/agent sessions showing a cwd, Blender's
+    path-in-title, mail subjects naming the project. Short names never match
+    (TITLE_MATCH_MIN); the longest candidate wins."""
+    title = (activity.get("title") or "").lower()
+    if not title:
+        return None
+    candidates = [(p["name"], p["id"]) for p in projects]
+    candidates += [(os.path.basename((f.get("path") or "").rstrip("/")), f["project_id"])
+                   for f in folders]
+    best = None
+    for text, pid in candidates:
+        t = (text or "").strip().lower()
+        if len(t) >= config.TITLE_MATCH_MIN and t in title:
+            if best is None or len(t) > len(best[1]):
+                best = (pid, t)
+    return best
+
+
 def resolve(activity, projects, rules, folders):
     """Return (project_id_or_None, confidence, reason)."""
     pid = _folder_match(activity.get("file_path"), folders)
@@ -60,4 +85,7 @@ def resolve(activity, projects, rules, folders):
     p = _rule_match(activity, projects, rules)
     if p:
         return p["id"], "auto-rule", "rule"
+    hit = _title_match(activity, projects, folders)
+    if hit:
+        return hit[0], "auto-title", hit[1]
     return None, "unassigned", "no match"

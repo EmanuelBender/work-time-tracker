@@ -47,6 +47,7 @@ class Tracker:
         self.current_app = None       # for the menu bar
         self.current_project = None
         self._context_project_id = None   # last strong project, for inference
+        self._context_ts = None           # when that context was last confirmed
 
     # --- loop ---------------------------------------------------------------
     def run(self):
@@ -105,10 +106,14 @@ class Tracker:
         # its own (e.g. Soundly with no project file) is then attributed to
         # that context — so it follows whatever project you're working in,
         # rather than being locked to one. Tagged 'inferred' so it's reviewable.
-        if confidence in ("auto-file", "auto-rule"):
+        if confidence in ("auto-file", "auto-rule", "auto-title"):
             self._context_project_id = project_id
+            self._context_ts = now
         elif project_id is None and self._context_project_id is not None:
-            project_id, confidence = self._context_project_id, "inferred"
+            if now - self._context_ts <= config.INFERENCE_TTL:
+                project_id, confidence = self._context_project_id, "inferred"
+            else:
+                self._context_project_id = None   # stale context: stop guessing
 
         key = _activity_key(project_id, activity)
         if self._current and self._current["key"] == key:
