@@ -14,6 +14,9 @@ IDLE_THRESHOLD = 120        # no input for this long => treat as away (not bille
 MIN_SESSION = 15            # discard sessions shorter than this (quick app flicks)
 MAX_TICK_GAP = 30           # ticks silent for this long (sleep, lid, stall) => the
                             # machine wasn't being worked on; end the open session
+MEDIA_IDLE_MAX = 1800       # playback (no-idle-sleep assertion) may extend a session
+                            # past the idle threshold — listening passes, video review,
+                            # calls — but never longer than this without any input
 AX_MESSAGING_TIMEOUT = 2.0  # cap AX calls so a busy app (Logic) can't stall the loop
 
 # Frontmost apps we never attribute (transient system UI) — see spike findings.

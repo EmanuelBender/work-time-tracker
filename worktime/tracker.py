@@ -82,11 +82,18 @@ class Tracker:
             return  # ignored / no frontmost -> leave the current session as-is
 
         if activity["idle_seconds"] >= config.IDLE_THRESHOLD:
-            self._close_current(now)
-            self.last_status = "idle"
-            self.current_app = self.current_project = None
-            self._context_project_id = None   # walking away clears the context
-            return
+            # No input — but running playback in the frontmost app is still
+            # work (listening passes, video review, calls). Media may extend
+            # the session, capped so a forgotten player can't bill for hours.
+            playing = (self._current is not None
+                       and activity["idle_seconds"] < config.MEDIA_IDLE_MAX
+                       and self.detector.media_active(activity["pid"]))
+            if not playing:
+                self._close_current(now)
+                self.last_status = "idle"
+                self.current_app = self.current_project = None
+                self._context_project_id = None   # walking away clears the context
+                return
 
         projects = db.list_projects()
         rules = db.list_rules()

@@ -69,13 +69,16 @@ def test_unassigned_when_nothing_matches(store):
 
 # --- tracker: inference + idle ---------------------------------------------
 class _Fake:
-    def __init__(self, items):
-        self.items, self.i = items, 0
+    def __init__(self, items, media=False):
+        self.items, self.i, self.media = items, 0, media
 
     def sample(self):
         a = self.items[min(self.i, len(self.items) - 1)]
         self.i += 1
         return a
+
+    def media_active(self, _pid):
+        return self.media
 
 
 def test_inference_follows_active_project(store, monkeypatch):
@@ -101,6 +104,57 @@ def test_idle_clears_context(store, monkeypatch):
     assert tr._context_project_id is None
     tr._tick()                                   # back, no context -> unassigned
     assert tr._current["project_id"] is None
+
+
+# Trimmed real `pmset -g assertions` output (2026-07-22). The quirks it
+# encodes: coreaudiod holds the audio assertion for the playing app (pid via
+# 'Created for PID'), and Electron apps hold a permanent junk assertion.
+PMSET_OUTPUT = """Assertion status system-wide:
+   PreventUserIdleSystemSleep     1
+Listed by owning process:
+   pid 10950(ChatGPT): [0x000711c70001a769] 16:21:31 NoIdleSleepAssertion named: "Electron"
+   pid 187(coreaudiod): [0x0007f4e4000194e4] 00:12:30 PreventUserIdleSystemSleep named: "com.apple.audio.F4-33-B7-89-38-2A:output.context.preventuseridlesleep"
+\tCreated for PID: 1487.
+\tResources: audio-out F4-33-B7-89-38-2A:output
+   pid 166(WindowServer): [0x0007dfe6000991af] 00:01:16 UserIsActive named: "com.apple.iohideventsystem.queue.tickle"
+   pid 1187(Google Chrome): [0x0007eff600019ade] 00:33:32 NoIdleSleepAssertion named: "Playing audio"
+Kernel Assertions: 0x104=USB,MAGICWAKE
+"""
+
+
+def test_media_pids_from_real_pmset_output():
+    from worktime.detector import _media_pids
+    pids = _media_pids(PMSET_OUTPUT)
+    assert 1487 in pids          # the app coreaudiod is playing for (Logic case)
+    assert 1187 in pids          # Chrome, genuinely playing audio
+    assert 10950 not in pids     # Electron's permanent junk assertion
+    assert 166 not in pids       # UserIsActive is input, not media
+
+
+def test_playback_extends_session_past_idle_threshold(store, monkeypatch):
+    monkeypatch.setattr(config, "MIN_SESSION", 0)
+    p = store.add_project("P", folder="/work/p")
+    tr = Tracker()
+    tr.detector = _Fake(
+        [_act(bundle="com.apple.logic10", file="/work/p/s.logicx"),
+         _act(bundle="com.apple.logic10", file="/work/p/s.logicx", idle=300)],
+        media=True)
+    tr._tick(); tr._tick()                    # listening pass: idle > threshold
+    assert tr._current is not None and tr._current["project_id"] == p
+    assert tr._context_project_id == p
+
+
+def test_playback_grace_is_capped(store, monkeypatch):
+    monkeypatch.setattr(config, "MIN_SESSION", 0)
+    store.add_project("P", folder="/work/p")
+    tr = Tracker()
+    tr.detector = _Fake(
+        [_act(bundle="com.apple.logic10", file="/work/p/s.logicx"),
+         _act(bundle="com.apple.logic10", file="/work/p/s.logicx",
+              idle=config.MEDIA_IDLE_MAX + 60)],
+        media=True)
+    tr._tick(); tr._tick()                    # forgotten player, no input for ages
+    assert tr._current is None
 
 
 def test_tick_gap_is_never_billed(store, monkeypatch):

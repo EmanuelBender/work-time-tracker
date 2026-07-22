@@ -9,6 +9,7 @@ Key lessons baked in (see PLAN.md "Detection spike findings"):
 """
 
 import os
+import re
 import subprocess
 import urllib.parse
 
@@ -98,6 +99,55 @@ def browser_url(bundle):
         return None
 
 
+# Power assertions that mean "media is actually running". UserIsActive and
+# system/background assertions are deliberately absent.
+_MEDIA_ASSERTIONS = {
+    "PreventUserIdleSystemSleep", "PreventUserIdleDisplaySleep",
+    "NoIdleSleepAssertion", "NoDisplaySleepAssertion",
+}
+
+_ASSERTION_LINE = re.compile(
+    r'\s*pid (\d+)\(.*?\): \[[^\]]*\] [\d:]+ (\w+) named: "(.*?)"')
+
+
+def _media_pids(pmset_output):
+    """pids effectively holding a no-idle-sleep assertion (media running).
+
+    Two quirks, both observed live: coreaudiod holds audio assertions on
+    behalf of the playing app — the 'Created for PID:' continuation line
+    names the real owner (this is how Logic playback maps to Logic). And
+    Electron apps hold a *permanent* NoIdleSleepAssertion named "Electron"
+    with nothing playing — ignored, or they would never idle.
+    """
+    pids, last_was_media = set(), False
+    for line in pmset_output.splitlines():
+        m = _ASSERTION_LINE.match(line)
+        if m:
+            pid, kind, name = int(m.group(1)), m.group(2), m.group(3)
+            last_was_media = kind in _MEDIA_ASSERTIONS and name != "Electron"
+            if last_was_media:
+                pids.add(pid)
+            continue
+        m = re.search(r"Created for PID: (\d+)", line)
+        if m and last_was_media:
+            pids.add(int(m.group(1)))
+    return pids
+
+
+def media_active(pid):
+    """True if this app is audibly/visibly playing — it (or coreaudiod on its
+    behalf) holds a no-idle-sleep power assertion. Lets listening passes,
+    video review, and calls count as work despite no keyboard/mouse input."""
+    if pid is None:
+        return False
+    try:
+        out = subprocess.run(["pmset", "-g", "assertions"],
+                             capture_output=True, text=True, timeout=2)
+        return pid in _media_pids(out.stdout)
+    except Exception:
+        return False
+
+
 def frontmost():
     """(pid, owner_name) of the genuinely active app via the window server."""
     info = CGWindowListCopyWindowInfo(kCGWindowListOptionOnScreenOnly, kCGNullWindowID)
@@ -138,6 +188,9 @@ class Detector:
 
     def __init__(self):
         self._sticky = {}   # pid -> last known document path
+
+    def media_active(self, pid):
+        return media_active(pid)
 
     def sample(self):
         """Return an activity dict, or None for ignored/transient frontmost."""
